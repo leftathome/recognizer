@@ -1,7 +1,7 @@
 """Validate notification events against the v1 schema."""
 import json
 import os
-from jsonschema import validate, ValidationError, Draft202012Validator
+from jsonschema import Draft202012Validator
 
 _SCHEMA_DIR = os.environ.get(
     "CAPTURE_SCHEMA_DIR",
