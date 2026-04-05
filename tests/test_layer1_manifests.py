@@ -1,4 +1,4 @@
-"""Validate Layer 1 manifests: NFD rules, SDM config, Cilium policies, ExternalSecrets."""
+"""Validate Layer 1+ manifests: NFD, SDM, Cilium, ExternalSecrets, ARM ConfigMap."""
 import os
 import re
 import pytest
@@ -178,3 +178,32 @@ class TestExternalSecrets:
         for s in ripper_secrets + relay_secrets:
             for d in s["spec"]["data"]:
                 assert "remoteRef" in d, f"Secret {d['secretKey']} missing remoteRef (would be plaintext)"
+
+
+# -- ARM ConfigMap (.12) --
+
+class TestARMConfigMap:
+
+    @pytest.fixture(scope="class")
+    def arm_config(self):
+        cm = _load("optical-ripper/configmap.yaml")
+        return yaml.safe_load(cm["data"]["arm.yaml"])
+
+    def test_rip_method_mkv(self, arm_config):
+        assert arm_config["RIPMETHOD"] == "mkv"
+
+    def test_eject_enabled(self, arm_config):
+        assert arm_config["EJECTENABLED"] is True
+
+    def test_handbrake_disabled(self, arm_config):
+        assert arm_config["HANDBRAKE_PRESET"] == "disabled"
+
+    def test_output_paths(self, arm_config):
+        assert arm_config["COMPLETED_PATH"] == "/out/video"
+        assert arm_config["AUDIO_COMPLETED_PATH"] == "/out/audio"
+        assert arm_config["DATA_COMPLETED_PATH"] == "/out/data"
+
+    def test_notify_webhook(self, arm_config):
+        assert arm_config["NOTIFY_WEBHOOK"] == (
+            "http://notification-relay.capture.svc.cluster.local:8080/event"
+        )
