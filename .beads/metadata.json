@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "archiver",
+  "project_id": "fe941c37-0702-44cf-bb6c-51a1ab36ada2"
+}
