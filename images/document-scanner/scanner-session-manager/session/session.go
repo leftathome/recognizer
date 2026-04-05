@@ -69,6 +69,8 @@ type Manager struct {
 	onClose      func(*Session) // callback when a session closes
 }
 
+const maxClosedSessions = 50 // keep last N for web UI "recent sessions"
+
 // Config holds session manager configuration.
 type Config struct {
 	BaseDir     string        // root output directory
@@ -208,6 +210,9 @@ func (m *Manager) closeCurrentLocked() *Session {
 	m.current.EndTime = m.clock.Now().UTC()
 	closed := m.current
 	m.closed = append(m.closed, closed)
+	if len(m.closed) > maxClosedSessions {
+		m.closed = m.closed[len(m.closed)-maxClosedSessions:]
+	}
 	m.current = nil
 	m.state = StateIdle
 	if m.onClose != nil {

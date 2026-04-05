@@ -3,6 +3,7 @@ import json
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
+from relay.destination import Destination
 
 
 @dataclass
@@ -18,7 +19,7 @@ def fan_out(event, destinations, timeout=10):
 
     Args:
         event: notification event dict.
-        destinations: list of dicts with keys: name, url, headers.
+        destinations: list of Destination objects (or dicts with name/url/headers).
         timeout: HTTP request timeout in seconds.
 
     Returns:
@@ -28,8 +29,13 @@ def fan_out(event, destinations, timeout=10):
     results = []
 
     for dest in destinations:
-        name = dest.get("name", "unnamed")
-        url = dest.get("url", "")
+        if isinstance(dest, Destination):
+            name, url, extra_headers = dest.name, dest.url, dest.headers
+        else:
+            name = dest.get("name", "unnamed")
+            url = dest.get("url", "")
+            extra_headers = dest.get("headers", {})
+
         if not url:
             results.append(DeliveryResult(
                 destination=name,
@@ -40,7 +46,7 @@ def fan_out(event, destinations, timeout=10):
             continue
 
         headers = {"Content-Type": "application/json"}
-        headers.update(dest.get("headers", {}))
+        headers.update(extra_headers)
 
         req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
         try:
