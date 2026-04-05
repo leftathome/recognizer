@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nfd-worker-config
+  namespace: node-feature-discovery
+  labels:
+    app.kubernetes.io/part-of: capture-framework
+data:
+  nfd-worker.conf: |
+    sources:
+      usb:
+        deviceClassWhitelist:
+          - "08"
+          - "ff"
+        deviceLabelFields:
+          - "vendor"
+          - "device"
+    rules:
+      - name: "pioneer-bdr-xs07uhd"
+        labels:
+          "openclaw.io/device-optical-drive": "pioneer-bdr-xs07uhd"
+        matchFeatures:
+          - feature: usb.device
+            matchExpressions:
+              vendor:
+                op: In
+                value:
+                  - "07e8"
+              # device:
+              #   op: In
+              #   value:
+              #     - "XXXX"  # TODO: fill in after first plug-in via lsusb
+
+      - name: "epson-ds-1630"
+        labels:
+          "openclaw.io/device-scanner": "epson-ds-1630"
+        matchFeatures:
+          - feature: usb.device
+            matchExpressions:
+              vendor:
+                op: In
+                value:
+                  - "04b8"
+              # device:
+              #   op: In
+              #   value:
+              #     - "XXXX"  # TODO: fill in after first plug-in via lsusb

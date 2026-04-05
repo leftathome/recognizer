@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "session_id": "20260404-190012-f4e5d6",
+  "timestamp_start": "2026-04-04T19:00:12Z",
+  "timestamp_end": "2026-04-04T19:05:42Z",
+  "source_device": "epson-ds-1630",
+  "input_method": "flatbed",
+  "duplex": false,
+  "resolution_dpi": 600,
+  "color_mode": "color",
+  "page_count": 2,
+  "pages": [
+    {
+      "filename": "page_001.tiff",
+      "side": "single",
+      "size_bytes": 50123456,
+      "dimensions": {"width_px": 5100, "height_px": 7020}
+    },
+    {
+      "filename": "page_002.tiff",
+      "side": "single",
+      "size_bytes": 49876543,
+      "dimensions": {"width_px": 5100, "height_px": 7020}
+    }
+  ],
+  "output_path": "/volume1/incoming/scans/sessions/20260404-190012-f4e5d6/",
+  "user_tags": ["book"],
+  "notes": "Scanning a paperback novel"
+}

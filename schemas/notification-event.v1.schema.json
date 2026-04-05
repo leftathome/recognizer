@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.io/schemas/capture/notification-event.v1.schema.json",
+  "title": "Capture Notification Event",
+  "description": "Emitted by capture workloads when a unit of work completes (one disc ripped, one scan session closed). Consumed by the notification relay for fan-out to downstream systems.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "source",
+    "event_type",
+    "timestamp",
+    "output_path",
+    "media_type",
+    "metadata",
+    "node_name"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Schema version. Consumers must check this before parsing."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["optical-ripper", "document-scanner"],
+      "description": "Which capture workload produced this event."
+    },
+    "event_type": {
+      "type": "string",
+      "enum": ["disc-extraction-complete", "scan-session-complete"],
+      "description": "The type of capture event."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of event emission."
+    },
+    "output_path": {
+      "type": "string",
+      "description": "Absolute path on the NAS where the captured output was written. Consumers use this to locate the files."
+    },
+    "media_type": {
+      "type": "string",
+      "enum": [
+        "video/uhd-bluray",
+        "video/bluray",
+        "video/dvd",
+        "audio/cd",
+        "audio/dvd-audio",
+        "data/iso",
+        "scan/adf-session",
+        "scan/flatbed-session"
+      ],
+      "description": "The type of media captured. Used by downstream pipelines to route processing."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Source-specific metadata. Fields are nullable -- optical ripper populates disc fields, scanner populates scan fields.",
+      "required": ["source_device"],
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": ["string", "null"],
+          "description": "Media title from metadata lookup (OMDb for video, MusicBrainz for audio). Null for data discs and scans."
+        },
+        "year": {
+          "type": ["integer", "null"],
+          "description": "Release year from metadata lookup. Null when not applicable."
+        },
+        "source_device": {
+          "type": "string",
+          "description": "Device identifier matching the NFD label value (e.g. 'pioneer-bdr-xs07uhd', 'epson-ds-1630')."
+        },
+        "disc_label": {
+          "type": ["string", "null"],
+          "description": "Volume label read from the disc. Null for scans."
+        },
+        "page_count": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Number of pages in a scan session. Null for disc rips."
+        },
+        "session_id": {
+          "type": ["string", "null"],
+          "description": "Scan session identifier matching the session directory name. Null for disc rips."
+        }
+      }
+    },
+    "node_name": {
+      "type": "string",
+      "description": "Kubernetes node name where the capture workload ran. Useful for debugging and auditing."
+    }
+  }
+}

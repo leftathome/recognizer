@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "source": "document-scanner",
+  "event_type": "scan-session-complete",
+  "timestamp": "2026-04-04T18:32:12Z",
+  "output_path": "/volume1/incoming/scans/sessions/20260404-183045-a1b2c3/",
+  "media_type": "scan/adf-session",
+  "metadata": {
+    "title": null,
+    "year": null,
+    "source_device": "epson-ds-1630",
+    "disc_label": null,
+    "page_count": 14,
+    "session_id": "20260404-183045-a1b2c3"
+  },
+  "node_name": "k8s-node-01"
+}

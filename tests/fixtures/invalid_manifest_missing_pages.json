@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "session_id": "20260404-183045-a1b2c3",
+  "timestamp_start": "2026-04-04T18:30:45Z",
+  "timestamp_end": "2026-04-04T18:32:12Z",
+  "source_device": "epson-ds-1630",
+  "input_method": "adf",
+  "duplex": true,
+  "resolution_dpi": 600,
+  "color_mode": "color",
+  "page_count": 1,
+  "output_path": "/volume1/incoming/scans/sessions/20260404-183045-a1b2c3/"
+}

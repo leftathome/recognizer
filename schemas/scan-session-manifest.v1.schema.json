@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.io/schemas/capture/scan-session-manifest.v1.schema.json",
+  "title": "Scan Session Manifest",
+  "description": "Written alongside TIFF files when a scan session closes. Provides a complete record of the session for downstream classification, OCR, and book reconstruction pipelines.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "session_id",
+    "timestamp_start",
+    "timestamp_end",
+    "source_device",
+    "input_method",
+    "duplex",
+    "resolution_dpi",
+    "color_mode",
+    "page_count",
+    "pages",
+    "output_path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Schema version. Consumers must check this before parsing."
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}-[0-9]{6}-[a-f0-9]{6}$",
+      "description": "Unique session identifier in format YYYYMMDD-HHMMSS-hexrand. Matches the session directory name."
+    },
+    "timestamp_start": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of the first page scan in this session."
+    },
+    "timestamp_end": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of session close (last page scanned + idle timeout, or manual close)."
+    },
+    "source_device": {
+      "type": "string",
+      "description": "Device identifier matching the NFD label value (e.g. 'epson-ds-1630')."
+    },
+    "input_method": {
+      "type": "string",
+      "enum": ["adf", "flatbed"],
+      "description": "Which physical input was used. ADF sessions close when the feeder empties; flatbed sessions close on idle timeout or manual action."
+    },
+    "duplex": {
+      "type": "boolean",
+      "description": "Whether duplex scanning was enabled. Only meaningful for ADF sessions; always false for flatbed."
+    },
+    "resolution_dpi": {
+      "type": "integer",
+      "minimum": 72,
+      "maximum": 1200,
+      "description": "Scan resolution in dots per inch. Default capture resolution is 600."
+    },
+    "color_mode": {
+      "type": "string",
+      "enum": ["color", "grayscale", "lineart"],
+      "description": "SANE color mode. Default capture mode is 'color' (24-bit). Grayscale and lineart included for future flexibility but not used in Phase 1."
+    },
+    "page_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Total number of page images in this session. For duplex ADF scans, each physical sheet produces two pages (front + back)."
+    },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered list of scanned page images.",
+      "items": {
+        "type": "object",
+        "required": ["filename", "side", "size_bytes", "dimensions"],
+        "additionalProperties": false,
+        "properties": {
+          "filename": {
+            "type": "string",
+            "pattern": "^page_[0-9]{3}\\.tiff$",
+            "description": "Filename within the session directory. Zero-padded three-digit sequence."
+          },
+          "side": {
+            "type": "string",
+            "enum": ["front", "back", "single"],
+            "description": "Which side of the physical sheet. 'single' for flatbed scans and simplex ADF."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "File size in bytes."
+          },
+          "dimensions": {
+            "type": "object",
+            "required": ["width_px", "height_px"],
+            "additionalProperties": false,
+            "properties": {
+              "width_px": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Image width in pixels."
+              },
+              "height_px": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Image height in pixels."
+              }
+            }
+          }
+        }
+      }
+    },
+    "output_path": {
+      "type": "string",
+      "description": "Absolute path on the NAS to the session directory containing the TIFFs and this manifest."
+    },
+    "user_tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Optional user-applied tags from the web UI. Free-form strings for downstream routing hints."
+    },
+    "notes": {
+      "type": "string",
+      "default": "",
+      "description": "Optional free-text notes from the web UI. Passed through to downstream pipelines."
+    }
+  }
+}

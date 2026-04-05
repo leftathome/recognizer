@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: smarter-device-manager-config
+  namespace: capture
+  labels:
+    app.kubernetes.io/part-of: capture-framework
+data:
+  conf.yaml: |
+    - devicematch: ^sr[0-9]+$
+      nummaxdevices: 1
+    - devicematch: ^sg[0-9]+$
+      nummaxdevices: 1
+    - devicematch: ^bus/usb/
+      nummaxdevices: 4

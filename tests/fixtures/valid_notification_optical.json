@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "source": "optical-ripper",
+  "event_type": "disc-extraction-complete",
+  "timestamp": "2026-04-04T18:30:00Z",
+  "output_path": "/volume1/incoming/video/Movie Title (2024)/",
+  "media_type": "video/uhd-bluray",
+  "metadata": {
+    "title": "Movie Title",
+    "year": 2024,
+    "source_device": "pioneer-bdr-xs07uhd",
+    "disc_label": "MOVIE_TITLE",
+    "page_count": null,
+    "session_id": null
+  },
+  "node_name": "k8s-node-02"
+}

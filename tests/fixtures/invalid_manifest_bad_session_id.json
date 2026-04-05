@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "session_id": "not-a-valid-id",
+  "timestamp_start": "2026-04-04T18:30:45Z",
+  "timestamp_end": "2026-04-04T18:32:12Z",
+  "source_device": "epson-ds-1630",
+  "input_method": "adf",
+  "duplex": true,
+  "resolution_dpi": 600,
+  "color_mode": "color",
+  "page_count": 1,
+  "pages": [
+    {
+      "filename": "page_001.tiff",
+      "side": "front",
+      "size_bytes": 25431876,
+      "dimensions": {"width_px": 5100, "height_px": 6600}
+    }
+  ],
+  "output_path": "/volume1/incoming/scans/sessions/not-a-valid-id/"
+}
