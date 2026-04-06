@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-relay
+  namespace: capture
+  labels:
+    app: notification-relay
+    app.kubernetes.io/name: notification-relay
+    app.kubernetes.io/part-of: capture-framework
+spec:
+  selector:
+    app: notification-relay
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
