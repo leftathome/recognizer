@@ -108,10 +108,7 @@ class TestCrossBeadConsistency:
         for resource_name in limits:
             if resource_name.startswith("smarter-devices/"):
                 device = resource_name.split("/")[1]
-                matched = any(
-                    re.search(pat, device)
-                    for pat in sdm_patterns
-                )
+                matched = any(re.search(pat, device) for pat in sdm_patterns)
                 assert matched, (
                     f"DaemonSet resource {resource_name} has no matching "
                     f"SDM device pattern in {sdm_patterns}"

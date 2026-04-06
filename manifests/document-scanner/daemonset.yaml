@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: document-scanner
+  namespace: capture
+  labels:
+    app.kubernetes.io/name: document-scanner
+    app.kubernetes.io/part-of: capture-framework
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: document-scanner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: document-scanner
+        app.kubernetes.io/part-of: capture-framework
+    spec:
+      nodeSelector:
+        openclaw.io/device-scanner: epson-ds-1630
+      containers:
+        - name: scanner
+          image: ghcr.io/leftathome/archiver/document-scanner:latest
+          resources:
+            limits:
+              smarter-devices/bus-usb: 1
+          volumeMounts:
+            - name: incoming
+              mountPath: /out
+            - name: scanner-config
+              mountPath: /etc/scanner
+          ports:
+            - name: web-ui
+              containerPort: 8080
+      volumes:
+        - name: incoming
+          persistentVolumeClaim:
+            claimName: incoming-nfs-pvc
+        - name: scanner-config
+          configMap:
+            name: scanner-config
