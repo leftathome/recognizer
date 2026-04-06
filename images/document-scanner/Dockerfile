@@ -2,7 +2,7 @@ FROM golang:1.26-bookworm AS builder
 
 WORKDIR /build
 COPY images/document-scanner/scanner-session-manager/ .
-RUN go build -o /scanner-session-manager ./cmd/...
+RUN CGO_ENABLED=0 go build -o /scanner-session-manager ./cmd/scanner
 
 FROM debian:bookworm-slim
 
