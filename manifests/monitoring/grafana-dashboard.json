@@ -99,7 +99,7 @@
     }
   ],
   "schemaVersion": 39,
-  "tags": ["capture", "archiver"],
+  "tags": ["capture", "recognizer"],
   "templating": {
     "list": [
       {

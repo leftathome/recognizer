@@ -48,7 +48,7 @@ class TestScannerDaemonSet:
 
     def test_image_uses_leftathome_namespace(self, pod_spec):
         image = pod_spec["containers"][0]["image"]
-        assert "ghcr.io/leftathome/archiver/" in image
+        assert "ghcr.io/leftathome/recognizer/" in image
 
 
 class TestScannerService:

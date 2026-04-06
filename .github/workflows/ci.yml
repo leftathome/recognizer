@@ -16,7 +16,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/leftathome/archiver
+  IMAGE_PREFIX: ghcr.io/leftathome/recognizer
 
 jobs:
   test-python:

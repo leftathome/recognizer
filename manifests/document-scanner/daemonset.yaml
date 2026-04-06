@@ -20,7 +20,7 @@ spec:
         openclaw.io/device-scanner: epson-ds-1630
       containers:
         - name: scanner
-          image: ghcr.io/leftathome/archiver/document-scanner:latest
+          image: ghcr.io/leftathome/recognizer/document-scanner:latest
           resources:
             limits:
               smarter-devices/bus-usb: 1

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/leftathome/archiver/images/document-scanner/scanner-session-manager/scan"
-	"github.com/leftathome/archiver/images/document-scanner/scanner-session-manager/session"
+	"github.com/leftathome/recognizer/images/document-scanner/scanner-session-manager/scan"
+	"github.com/leftathome/recognizer/images/document-scanner/scanner-session-manager/session"
 )
 
 // Handler holds dependencies for the HTTP handlers.

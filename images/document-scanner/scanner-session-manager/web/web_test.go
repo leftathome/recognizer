@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leftathome/archiver/images/document-scanner/scanner-session-manager/session"
+	"github.com/leftathome/recognizer/images/document-scanner/scanner-session-manager/session"
 )
 
 func setup(t *testing.T) (*Handler, *session.Manager) {
