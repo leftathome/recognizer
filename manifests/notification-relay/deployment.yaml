@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: relay
-          image: ghcr.io/leftathome/notification-relay:latest
+          image: ghcr.io/leftathome/archiver/notification-relay:latest
           ports:
             - name: http
               containerPort: 8080
