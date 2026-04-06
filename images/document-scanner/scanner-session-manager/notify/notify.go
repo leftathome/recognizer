@@ -61,7 +61,7 @@ func BuildEvent(sess *session.Session, device string) Event {
 		SchemaVersion: "1.0",
 		Source:        "document-scanner",
 		EventType:     "scan-session-complete",
-		Timestamp:     time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+		Timestamp:     time.Now().UTC().Format(time.RFC3339),
 		OutputPath:    sess.OutputDir,
 		MediaType:     mediaType,
 		Metadata: Metadata{

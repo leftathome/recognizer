@@ -1,5 +1,6 @@
 """Tests for optical ripper DaemonSet manifest + cross-bead consistency."""
 import os
+import re
 import pytest
 import yaml
 
@@ -108,7 +109,7 @@ class TestCrossBeadConsistency:
             if resource_name.startswith("smarter-devices/"):
                 device = resource_name.split("/")[1]
                 matched = any(
-                    __import__("re").search(pat, device)
+                    re.search(pat, device)
                     for pat in sdm_patterns
                 )
                 assert matched, (

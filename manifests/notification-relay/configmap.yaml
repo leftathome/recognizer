@@ -15,6 +15,5 @@ data:
     #     url: https://placeholder.example.com
     #     url_env: DISCORD_WEBHOOK_URL
     #   - name: pushover
-    #     url: https://api.pushover.net/1/messages.json
-    #     headers:
-    #       Authorization: "Bearer ${PUSHOVER_TOKEN}"
+    #     url: https://placeholder.example.com
+    #     url_env: PUSHOVER_API_URL

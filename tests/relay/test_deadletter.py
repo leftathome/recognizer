@@ -62,9 +62,16 @@ class TestDeadLetter:
         tmp_file = path + ".tmp"
         assert not os.path.exists(tmp_file)
 
-    def test_retry_count_in_envelope(self, tmp_path):
+    def test_attempts_in_envelope(self, tmp_path):
+        dl_dir = str(tmp_path / "dead-letter")
+        path = write_dead_letter(SAMPLE_EVENT, "error", dl_dir, attempts=5)
+        with open(path) as f:
+            envelope = json.load(f)
+        assert envelope["attempts"] == 5
+
+    def test_attempts_default(self, tmp_path):
         dl_dir = str(tmp_path / "dead-letter")
         path = write_dead_letter(SAMPLE_EVENT, "error", dl_dir)
         with open(path) as f:
             envelope = json.load(f)
-        assert envelope["retry_count"] == 3
+        assert envelope["attempts"] == 3

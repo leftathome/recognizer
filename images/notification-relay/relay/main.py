@@ -3,7 +3,7 @@ import json
 import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from relay.validate import validate_event, validation_errors
+from relay.validate import validation_errors
 from relay.config import load_destinations
 from relay.fanout import fan_out, DeliveryResult
 from relay.retry import with_retry

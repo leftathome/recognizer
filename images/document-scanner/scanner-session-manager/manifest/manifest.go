@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/openclaw/scanner-session-manager/session"
 )
@@ -77,8 +78,8 @@ func Build(sess *session.Session, device string, resolution int, colorMode strin
 	return &Manifest{
 		SchemaVersion:  "1.0",
 		SessionID:      sess.ID,
-		TimestampStart: sess.StartTime.Format("2006-01-02T15:04:05Z"),
-		TimestampEnd:   sess.EndTime.Format("2006-01-02T15:04:05Z"),
+		TimestampStart: sess.StartTime.Format(time.RFC3339),
+		TimestampEnd:   sess.EndTime.Format(time.RFC3339),
 		SourceDevice:   device,
 		InputMethod:    string(sess.InputMethod),
 		Duplex:         sess.Duplex,
