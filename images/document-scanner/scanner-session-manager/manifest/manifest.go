@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/openclaw/scanner-session-manager/session"
+	"github.com/leftathome/scanner-session-manager/session"
 )
 
 // PageEntry represents a single page in the manifest.

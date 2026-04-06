@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openclaw/scanner-session-manager/session"
+	"github.com/leftathome/scanner-session-manager/session"
 )
 
 func makeSession() *session.Session {

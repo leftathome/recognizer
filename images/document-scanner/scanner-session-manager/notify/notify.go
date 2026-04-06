@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/openclaw/scanner-session-manager/session"
+	"github.com/leftathome/scanner-session-manager/session"
 )
 
 // Event matches the notification-event.v1 schema.
