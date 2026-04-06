@@ -100,11 +100,11 @@ func TestAddPage_AccumulatesPages(t *testing.T) {
 
 func TestADFComplete_ClosesSession(t *testing.T) {
 	clk := newMockClock(baseTime())
-	var closedSess *Session
+	done := make(chan *Session, 1)
 	m := NewManager(Config{
 		BaseDir: t.TempDir(),
 		Clock:   clk,
-		OnClose: func(s *Session) { closedSess = s },
+		OnClose: func(s *Session) { done <- s },
 	})
 
 	m.AddPage(InputADF, true, "front")
@@ -126,10 +126,13 @@ func TestADFComplete_ClosesSession(t *testing.T) {
 		t.Error("expected end time to be set")
 	}
 
-	// onClose callback fires asynchronously
-	time.Sleep(10 * time.Millisecond)
-	if closedSess == nil {
-		t.Error("expected onClose callback to fire")
+	select {
+	case s := <-done:
+		if s == nil {
+			t.Error("onClose received nil session")
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("onClose callback did not fire within 2s")
 	}
 }
 
