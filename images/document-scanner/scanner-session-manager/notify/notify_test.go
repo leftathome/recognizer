@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leftathome/scanner-session-manager/session"
+	"github.com/leftathome/archiver/images/document-scanner/scanner-session-manager/session"
 )
 
 func makeSession() *session.Session {
