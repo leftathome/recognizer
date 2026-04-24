@@ -8,3 +8,6 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Claude Code worktrees (per-agent isolated working directories)
+.claude/worktrees/
