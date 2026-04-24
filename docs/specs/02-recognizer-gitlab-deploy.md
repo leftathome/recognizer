@@ -108,12 +108,6 @@ networkPolicies:
 monitoring:
   enabled: true
 
-nodeFeatureDiscovery:
-  enabled: true
-
-devicePlugin:
-  enabled: true
-
 documentScanner:
   enabled: true
   image:
