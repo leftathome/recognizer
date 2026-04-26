@@ -1,0 +1,69 @@
+image:
+  registry: registry.gitlab.orac.local
+  repository: steve/recognizer
+  pullPolicy: IfNotPresent
+  pullSecrets:
+    - name: recognizer-registry
+
+createNamespace: false
+
+commonLabels: {}
+commonAnnotations: {}
+
+nfs:
+  enabled: true
+  server: ""
+  path: /mnt/tank/recognizer
+  storageClassName: nfs-recognizer
+  capacity: 1Ti
+  reclaimPolicy: Retain
+
+networkPolicies:
+  enabled: true
+
+monitoring:
+  enabled: true
+
+documentScanner:
+  enabled: true
+  image:
+    name: document-scanner
+    tag: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  nodeSelector:
+    feature.node.kubernetes.io/scanner: "true"
+
+notificationRelay:
+  enabled: true
+  image:
+    name: notification-relay
+    tag: ""
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+opticalRipper:
+  enabled: true
+  image:
+    repository: automaticrippingmachine/automatic-ripping-machine
+    tag: "2.6.0"
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  nodeSelector:
+    smarter-devices/sr0: "1"
