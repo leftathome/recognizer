@@ -55,6 +55,12 @@ notificationRelay:
 
 opticalRipper:
   enabled: true
+  # NOTE: opticalRipper uses an upstream Docker Hub image, NOT one we build.
+  # Its image schema (repository + tag) intentionally differs from
+  # documentScanner/notificationRelay (which use name + tag composed via the
+  # recognizer.image helper). Templates must render this image inline:
+  #   image: "{{ .Values.opticalRipper.image.repository }}:{{ .Values.opticalRipper.image.tag }}"
+  # NOT via the recognizer.image helper.
   image:
     repository: automaticrippingmachine/automatic-ripping-machine
     tag: "2.6.0"

@@ -31,12 +31,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- with .Values.commonLabels }}
-{{ toYaml . }}
+{{- toYaml . | nindent 0 }}
 {{- end }}
 {{- end -}}
 
 {{/*
-Image reference. Usage: {{ include "recognizer.image" (dict "root" $ "name" "document-scanner" "tag" .Values.documentScanner.image.tag) }}
+Image reference for in-house images that we publish to the GitLab registry.
+Usage: {{ include "recognizer.image" (dict "root" $ "name" "document-scanner" "tag" .Values.documentScanner.image.tag) }}
+
+DO NOT use this helper for opticalRipper -- that workload pulls an upstream
+image (automaticrippingmachine/automatic-ripping-machine) directly. See
+values.yaml `opticalRipper.image` for the schema; render its image string
+inline as `"{{ .Values.opticalRipper.image.repository }}:{{ .Values.opticalRipper.image.tag }}"`.
 */}}
 {{- define "recognizer.image" -}}
 {{- $tag := .tag | default .root.Chart.AppVersion -}}
