@@ -1,0 +1,20 @@
+{{- if .Values.nfs.enabled }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ include "recognizer.fullname" . }}-nfs
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  capacity:
+    storage: {{ .Values.nfs.capacity }}
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: {{ .Values.nfs.reclaimPolicy }}
+  storageClassName: {{ .Values.nfs.storageClassName }}
+  nfs:
+    server: {{ required "nfs.server is required when nfs.enabled" .Values.nfs.server | quote }}
+    path: {{ .Values.nfs.path | quote }}
+{{- end }}
