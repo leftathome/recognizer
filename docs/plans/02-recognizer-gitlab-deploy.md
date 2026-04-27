@@ -1584,7 +1584,7 @@ data:
     rules:
       - name: "pioneer-bdr-xs07uhd"
         labels:
-          "openclaw.io/device-optical-drive": "pioneer-bdr-xs07uhd"
+          "recognizer.io/device-optical-drive": "pioneer-bdr-xs07uhd"
         matchFeatures:
           - feature: usb.device
             matchExpressions:
@@ -1599,7 +1599,7 @@ data:
 
       - name: "epson-ds-1630"
         labels:
-          "openclaw.io/device-scanner": "epson-ds-1630"
+          "recognizer.io/device-scanner": "epson-ds-1630"
         matchFeatures:
           - feature: usb.device
             matchExpressions:
