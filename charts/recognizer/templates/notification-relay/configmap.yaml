@@ -1,0 +1,21 @@
+{{- if .Values.notificationRelay.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "recognizer.fullname" . }}-relay-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notification-relay
+data:
+  config.yaml: |
+    destinations: []
+    # Example:
+    # destinations:
+    #   - name: discord
+    #     url: https://placeholder.example.com
+    #     url_env: DISCORD_WEBHOOK_URL
+    #   - name: pushover
+    #     url: https://placeholder.example.com
+    #     url_env: PUSHOVER_API_URL
+{{- end }}
