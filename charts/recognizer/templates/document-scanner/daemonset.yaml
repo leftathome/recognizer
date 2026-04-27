@@ -45,5 +45,5 @@ spec:
             claimName: {{ include "recognizer.fullname" . }}-nfs
         - name: scanner-config
           configMap:
-            name: scanner-config
+            name: {{ include "recognizer.fullname" . }}-scanner-config
 {{- end }}

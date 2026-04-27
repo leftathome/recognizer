@@ -9,7 +9,7 @@ metadata:
 spec:
   endpointSelector:
     matchLabels:
-      app.kubernetes.io/part-of: capture-framework
+      app.kubernetes.io/part-of: recognizer
   egress:
     - toCIDR:
         - 192.168.1.0/24
