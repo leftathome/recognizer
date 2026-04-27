@@ -1,0 +1,49 @@
+{{- if .Values.documentScanner.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "recognizer.fullname" . }}-document-scanner
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: document-scanner
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "recognizer.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: document-scanner
+  template:
+    metadata:
+      labels:
+        {{- include "recognizer.labels" . | nindent 8 }}
+        app.kubernetes.io/component: document-scanner
+    spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      nodeSelector:
+        {{- toYaml .Values.documentScanner.nodeSelector | nindent 8 }}
+      containers:
+        - name: scanner
+          image: {{ include "recognizer.image" (dict "root" $ "name" .Values.documentScanner.image.name "tag" .Values.documentScanner.image.tag) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          resources:
+            {{- toYaml .Values.documentScanner.resources | nindent 12 }}
+          volumeMounts:
+            - name: incoming
+              mountPath: /out
+            - name: scanner-config
+              mountPath: /etc/scanner
+          ports:
+            - name: web-ui
+              containerPort: 8080
+      volumes:
+        - name: incoming
+          persistentVolumeClaim:
+            claimName: {{ include "recognizer.fullname" . }}-nfs
+        - name: scanner-config
+          configMap:
+            name: scanner-config
+{{- end }}
