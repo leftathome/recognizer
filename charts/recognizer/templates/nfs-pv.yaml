@@ -15,6 +15,6 @@ spec:
   persistentVolumeReclaimPolicy: {{ .Values.nfs.reclaimPolicy }}
   storageClassName: {{ .Values.nfs.storageClassName }}
   nfs:
-    server: {{ required "nfs.server is required when nfs.enabled" .Values.nfs.server | quote }}
+    server: {{ required "Set nfs.server to the NFS server hostname or IP (required when nfs.enabled=true)" .Values.nfs.server | quote }}
     path: {{ .Values.nfs.path | quote }}
 {{- end }}
