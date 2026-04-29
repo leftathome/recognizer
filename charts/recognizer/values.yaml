@@ -79,5 +79,15 @@ opticalRipper:
     limits:
       cpu: "2"
       memory: 4Gi
+      # Reserve the optical drive (sr0) and SCSI generic device (sg0) on the
+      # node via smarter-device-manager. ARM needs both to read discs and
+      # eject the tray. Matches source manifests/optical-ripper/daemonset.yaml.
+      smarter-devices/sr0: 1
+      smarter-devices/sg0: 1
+  # Pins to nodes labeled by NFD when the Pioneer BDR-XS07UHD optical drive
+  # is plugged in. See gitops configmap-nfd-worker-recognizer.yaml for the
+  # NFD rule that generates this label. Override to support additional
+  # drive models (each NFD rule produces a distinct
+  # recognizer.io/device-optical-drive label value).
   nodeSelector:
-    smarter-devices/sr0: "1"
+    recognizer.io/device-optical-drive: pioneer-bdr-xs07uhd
