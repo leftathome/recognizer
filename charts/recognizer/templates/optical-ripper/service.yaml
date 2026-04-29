@@ -1,0 +1,20 @@
+{{- if .Values.opticalRipper.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "recognizer.fullname" . }}-optical-ripper
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: optical-ripper
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "recognizer.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: optical-ripper
+  ports:
+    - name: web-ui
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+{{- end }}

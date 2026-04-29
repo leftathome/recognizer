@@ -1,0 +1,20 @@
+{{- if .Values.opticalRipper.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "recognizer.fullname" . }}-arm-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: optical-ripper
+data:
+  arm.yaml: |
+    RIPMETHOD: "mkv"
+    EJECTENABLED: true
+    JUSTMAKEISO: false
+    COMPLETED_PATH: "/out/video"
+    AUDIO_COMPLETED_PATH: "/out/audio"
+    DATA_COMPLETED_PATH: "/out/data"
+    HANDBRAKE_PRESET: "disabled"
+    NOTIFY_WEBHOOK: "http://notification-relay.capture.svc.cluster.local:8080/event"
+{{- end }}
