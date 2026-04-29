@@ -1,0 +1,29 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "recognizer.fullname" . }}-alerts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: capture-framework
+      rules:
+        - alert: NotificationDeadLetterBacklog
+          expr: increase(capture_notification_dead_letter_total[15m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Notification dead-letter count increasing"
+            description: "Dead-lettered notifications have been accumulating for 15 minutes. Check relay connectivity."
+        - alert: CaptureWorkloadCrashLoop
+          expr: increase(kube_pod_container_status_restarts_total{namespace="capture"}[1h]) > 3
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Capture workload {{ "{{" }} $labels.container {{ "}}" }} is crash-looping"
+            description: "Pod {{ "{{" }} $labels.pod {{ "}}" }} has restarted {{ "{{" }} $value {{ "}}" }} times in the last hour."
+{{- end }}
