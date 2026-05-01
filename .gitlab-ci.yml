@@ -1,0 +1,79 @@
+stages:
+  - test
+
+variables:
+  GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
+  GOPATH: "$CI_PROJECT_DIR/.cache/go"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+.cache:
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths:
+      - .cache/
+
+test:python:
+  stage: test
+  image: python:3.12-slim
+  extends: .cache
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+    - curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin/ kubeconform
+    - pip install -r requirements.txt
+  script:
+    - pytest tests/ -v --tb=short --junitxml=report-python.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report-python.xml
+    expire_in: 1 week
+
+test:go:
+  stage: test
+  image: golang:1.26-bookworm
+  extends: .cache
+  variables:
+    GO_MODULE_DIR: images/document-scanner/scanner-session-manager
+  before_script:
+    - go install github.com/jstemmer/go-junit-report/v2@latest
+  script:
+    - cd "$GO_MODULE_DIR"
+    - go vet ./...
+    - go test ./... -count=1 -race -v 2>&1 | go-junit-report -set-exit-code > "$CI_PROJECT_DIR/report-go.xml"
+  artifacts:
+    when: always
+    reports:
+      junit: report-go.xml
+    expire_in: 1 week
+
+vuln:go:
+  stage: test
+  image: golang:1.26-bookworm
+  extends: .cache
+  before_script:
+    - go install golang.org/x/vuln/cmd/govulncheck@latest
+  script:
+    - cd images/document-scanner/scanner-session-manager
+    - govulncheck ./...
+  allow_failure: false
+
+scan:trivy-fs:
+  stage: test
+  image: aquasec/trivy:latest
+  script:
+    - trivy fs --exit-code 1 --severity HIGH,CRITICAL --no-progress .
+  allow_failure: false
+
+helm:lint:
+  stage: test
+  image:
+    name: alpine/helm:3.14.4
+    entrypoint: [""]
+  script:
+    - helm lint charts/recognizer
+    - helm template recognizer charts/recognizer --set nfs.server=nas.orac.local --namespace recognizer > /tmp/render.yaml
+    - wc -l /tmp/render.yaml
+  artifacts:
+    paths:
+      - /tmp/render.yaml
+    expire_in: 1 week
