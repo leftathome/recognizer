@@ -35,8 +35,8 @@ test:python:
     - pytest tests/ -v --tb=short --junitxml=report-python.xml
   artifacts:
     when: always
-    reports:
-      junit: report-python.xml
+    paths:
+      - report-python.xml
     expire_in: 1 week
 
 test:go:
@@ -51,15 +51,18 @@ test:go:
     KUBERNETES_MEMORY_REQUEST: "1Gi"
     KUBERNETES_MEMORY_LIMIT: "3Gi"
   before_script:
+    # `go install` puts binaries in $GOPATH/bin; that path is NOT on $PATH by default.
+    - export PATH="$PATH:$(go env GOPATH)/bin"
     - go install github.com/jstemmer/go-junit-report/v2@latest
   script:
+    - export PATH="$PATH:$(go env GOPATH)/bin"
     - cd "$GO_MODULE_DIR"
     - go vet ./...
     - go test ./... -count=1 -race -v 2>&1 | go-junit-report -set-exit-code > "$CI_PROJECT_DIR/report-go.xml"
   artifacts:
     when: always
-    reports:
-      junit: report-go.xml
+    paths:
+      - report-go.xml
     expire_in: 1 week
 
 vuln:go:
@@ -71,8 +74,10 @@ vuln:go:
     KUBERNETES_MEMORY_REQUEST: "1Gi"
     KUBERNETES_MEMORY_LIMIT: "2Gi"
   before_script:
+    - export PATH="$PATH:$(go env GOPATH)/bin"
     - go install golang.org/x/vuln/cmd/govulncheck@latest
   script:
+    - export PATH="$PATH:$(go env GOPATH)/bin"
     - cd images/document-scanner/scanner-session-manager
     - govulncheck ./...
   allow_failure: false
@@ -91,9 +96,12 @@ helm:lint:
     entrypoint: [""]
   script:
     - helm lint charts/recognizer
-    - helm template recognizer charts/recognizer --set nfs.server=nas.orac.local --namespace recognizer > /tmp/render.yaml
-    - wc -l /tmp/render.yaml
+    # Pin --kube-version to the actual orac cluster version. Helm's offline
+    # `template` defaults to the version compiled into the helm binary
+    # (1.29 for alpine/helm:3.14.4), but the chart requires kubeVersion >=1.30.
+    - helm template recognizer charts/recognizer --kube-version 1.34.0 --set nfs.server=nas.orac.local --namespace recognizer > render.yaml
+    - wc -l render.yaml
   artifacts:
     paths:
-      - /tmp/render.yaml
+      - render.yaml
     expire_in: 1 week
