@@ -5,6 +5,17 @@ variables:
   GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
   GOPATH: "$CI_PROJECT_DIR/.cache/go"
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  # Defaults applied to every job. The runner's chart-level defaults are very
+  # small; explicit values here let each job request what it actually needs.
+  # Override per-job by re-declaring the variable in a job's `variables:` block.
+  KUBERNETES_CPU_REQUEST: "250m"
+  KUBERNETES_CPU_LIMIT: "1"
+  KUBERNETES_MEMORY_REQUEST: "512Mi"
+  KUBERNETES_MEMORY_LIMIT: "1Gi"
+  KUBERNETES_HELPER_CPU_REQUEST: "100m"
+  KUBERNETES_HELPER_CPU_LIMIT: "500m"
+  KUBERNETES_HELPER_MEMORY_REQUEST: "128Mi"
+  KUBERNETES_HELPER_MEMORY_LIMIT: "256Mi"
 
 .cache:
   cache:
@@ -34,6 +45,11 @@ test:go:
   extends: .cache
   variables:
     GO_MODULE_DIR: images/document-scanner/scanner-session-manager
+    # `go test -race` doubles memory footprint; allow more headroom.
+    KUBERNETES_CPU_REQUEST: "500m"
+    KUBERNETES_CPU_LIMIT: "2"
+    KUBERNETES_MEMORY_REQUEST: "1Gi"
+    KUBERNETES_MEMORY_LIMIT: "3Gi"
   before_script:
     - go install github.com/jstemmer/go-junit-report/v2@latest
   script:
@@ -50,6 +66,10 @@ vuln:go:
   stage: test
   image: golang:1.26-bookworm
   extends: .cache
+  variables:
+    # govulncheck downloads the vulnerability database into memory.
+    KUBERNETES_MEMORY_REQUEST: "1Gi"
+    KUBERNETES_MEMORY_LIMIT: "2Gi"
   before_script:
     - go install golang.org/x/vuln/cmd/govulncheck@latest
   script:
