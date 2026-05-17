@@ -16,6 +16,10 @@ variables:
   KUBERNETES_HELPER_CPU_LIMIT: "500m"
   KUBERNETES_HELPER_MEMORY_REQUEST: "128Mi"
   KUBERNETES_HELPER_MEMORY_LIMIT: "256Mi"
+  # The runner's helper image is currently pinned to x86_64 only; arm64
+  # nodes can't pull it. Constrain build pods to amd64 nodes until the
+  # platform team makes the helper-image tag dynamic per node arch.
+  KUBERNETES_NODE_SELECTOR_arch: "kubernetes.io/arch=amd64"
 
 .cache:
   cache:
