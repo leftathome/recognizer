@@ -39,7 +39,7 @@ test:python:
 
 test:go:
   stage: test
-  image: golang:1.26-bookworm
+  image: golang:1.26.3-bookworm
   extends: .cache
   variables:
     GO_MODULE_DIR: images/document-scanner/scanner-session-manager
@@ -60,7 +60,7 @@ test:go:
 
 vuln:go:
   stage: test
-  image: golang:1.26-bookworm
+  image: golang:1.26.3-bookworm
   extends: .cache
   variables:
     # govulncheck downloads the vulnerability database into memory.
