@@ -101,47 +101,42 @@ helm:lint:
     - wc -l render.yaml
 
 # ---------------------------------------------------------------------------
-# C2: build stage (push=false smoke test). Multi-arch buildx + dind.
+# C2: build stage (push=false smoke test).
+#
+# Note: the cluster's GitLab Runner config has `privileged = false`, so
+# `docker:27-dind` services don't initialize and `docker buildx` can't run.
+# Using kaniko (rootless, no daemon) for amd64-only builds. Multi-arch is
+# deferred until the runner allows privileged services; tracked as
+# gitops-vney.
 # ---------------------------------------------------------------------------
 
 .build:
   stage: build
-  image: docker:27
-  services:
-    - docker:27-dind
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
   variables:
-    DOCKER_TLS_CERTDIR: "/certs"
-    # buildx + dind needs more memory than the test jobs.
     KUBERNETES_CPU_REQUEST: "500m"
     KUBERNETES_CPU_LIMIT: "2"
     KUBERNETES_MEMORY_REQUEST: "1Gi"
     KUBERNETES_MEMORY_LIMIT: "4Gi"
-    KUBERNETES_SERVICE_CPU_REQUEST: "500m"
-    KUBERNETES_SERVICE_CPU_LIMIT: "2"
-    KUBERNETES_SERVICE_MEMORY_REQUEST: "1Gi"
-    KUBERNETES_SERVICE_MEMORY_LIMIT: "4Gi"
-  before_script:
-    - docker info
-    - docker buildx create --use --name builder
-    - docker buildx inspect --bootstrap
   script:
     - >
-      docker buildx build
-      --platform linux/amd64,linux/arm64
-      --file "$DOCKERFILE"
-      --tag "$IMAGE_NAME:$CI_COMMIT_SHORT_SHA"
-      --push=false
-      --progress plain
-      .
+      /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/${DOCKERFILE}"
+      --destination "dummy/${COMPONENT}:${CI_COMMIT_SHORT_SHA}"
+      --no-push
+      --verbosity info
 
 build:document-scanner:
   extends: .build
   variables:
     DOCKERFILE: images/document-scanner/Dockerfile
-    IMAGE_NAME: dummy/document-scanner
+    COMPONENT: document-scanner
 
 build:notification-relay:
   extends: .build
   variables:
     DOCKERFILE: images/notification-relay/Dockerfile
-    IMAGE_NAME: dummy/notification-relay
+    COMPONENT: notification-relay
