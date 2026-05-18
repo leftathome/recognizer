@@ -2,6 +2,7 @@ stages:
   - test
   - build
   - package
+  - release
 
 variables:
   GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
@@ -171,3 +172,29 @@ package:chart:
     - helm template recognizer charts/recognizer --kube-version 1.34.0 --set nfs.server=nas.orac.local --namespace recognizer | kubeconform -strict -summary -ignore-missing-schemas -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
     - helm package charts/recognizer --version "$VERSION" --app-version "$VERSION" --destination .
     - ls -lh recognizer-*.tgz
+
+# ---------------------------------------------------------------------------
+# C4: release stage (tag-triggered only). Creates a GitLab Release with the
+# changelog excerpt as the description. Will only run on v* tags.
+# ---------------------------------------------------------------------------
+
+release:gitlab:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+/
+  variables:
+    KUBERNETES_CPU_REQUEST: "100m"
+    KUBERNETES_CPU_LIMIT: "500m"
+    KUBERNETES_MEMORY_REQUEST: "128Mi"
+    KUBERNETES_MEMORY_LIMIT: "256Mi"
+  before_script:
+    - apk add --no-cache gawk
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md > release-notes.md
+    - cat release-notes.md
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: $CI_COMMIT_TAG
+    description: ./release-notes.md
