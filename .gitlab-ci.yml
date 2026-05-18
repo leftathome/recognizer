@@ -122,14 +122,22 @@ helm:lint:
     KUBERNETES_CPU_LIMIT: "2"
     KUBERNETES_MEMORY_REQUEST: "1Gi"
     KUBERNETES_MEMORY_LIMIT: "4Gi"
+  before_script:
+    # Kaniko reads registry creds from /kaniko/.docker/config.json. The CI
+    # variables CI_REGISTRY{,_USER,_PASSWORD} are predefined by GitLab.
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"username\":\"${CI_REGISTRY_USER}\",\"password\":\"${CI_REGISTRY_PASSWORD}\"}}}" > /kaniko/.docker/config.json
   script:
-    - >
-      /kaniko/executor
-      --context "${CI_PROJECT_DIR}"
-      --dockerfile "${CI_PROJECT_DIR}/${DOCKERFILE}"
-      --destination "dummy/${COMPONENT}:${CI_COMMIT_SHORT_SHA}"
-      --no-push
-      --verbosity info
+    # Always tag :<short-sha>. Add :latest + :main-<sha> on main. Add :<version> on v* tags.
+    - DEST_ARGS="--destination ${CI_REGISTRY_IMAGE}/${COMPONENT}:${CI_COMMIT_SHORT_SHA}"
+    - if [ "$CI_COMMIT_REF_NAME" = "main" ]; then DEST_ARGS="$DEST_ARGS --destination ${CI_REGISTRY_IMAGE}/${COMPONENT}:latest --destination ${CI_REGISTRY_IMAGE}/${COMPONENT}:main-${CI_COMMIT_SHORT_SHA}"; fi
+    - if [ -n "$CI_COMMIT_TAG" ]; then VERSION="${CI_COMMIT_TAG#v}"; DEST_ARGS="$DEST_ARGS --destination ${CI_REGISTRY_IMAGE}/${COMPONENT}:${VERSION}"; fi
+    # Push only on main + tags. Feature branches build to verify but discard.
+    - PUSH_FLAG=""
+    - if [ "$CI_COMMIT_REF_NAME" != "main" ] && [ -z "$CI_COMMIT_TAG" ]; then PUSH_FLAG="--no-push"; fi
+    - echo "Build destinations:" $DEST_ARGS
+    - echo "Push mode:" "${PUSH_FLAG:-PUSH}"
+    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/${DOCKERFILE}" $DEST_ARGS $PUSH_FLAG --verbosity info
 
 build:document-scanner:
   extends: .build
