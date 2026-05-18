@@ -1,5 +1,5 @@
 image:
-  registry: registry.gitlab.orac.local
+  registry: registry.orac.local
   repository: steve/recognizer
   pullPolicy: IfNotPresent
   pullSecrets:
