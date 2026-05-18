@@ -36,7 +36,7 @@ The project is **`recognizer`** everywhere going forward.
 | GitLab project | `steve/archiver` | `steve/recognizer` (renamed by user, 2026-04-22) |
 | GitHub remote | `leftathome/recognizer.git` | unchanged |
 | Git remote `gitlab` URL | `https://gitlab.orac.local/steve/archiver.git` | `https://gitlab.orac.local/steve/recognizer.git` |
-| Image registry path | `ghcr.io/leftathome/recognizer/*` | `registry.gitlab.orac.local/steve/recognizer/*` |
+| Image registry path | `ghcr.io/leftathome/recognizer/*` | `registry.orac.local/steve/recognizer/*` |
 | Helm chart name | (none) | `recognizer` |
 | K8s namespace | `archiver` (in manifests) | `recognizer` (in chart) |
 | K8s resource name prefixes | `archiver-notification-relay`, etc. | `recognizer-notification-relay`, etc. |
@@ -89,7 +89,7 @@ Top-level values:
 
 ```yaml
 image:
-  registry: registry.gitlab.orac.local
+  registry: registry.orac.local
   repository: steve/recognizer
   pullPolicy: IfNotPresent
   pullSecrets:
@@ -172,13 +172,13 @@ Both ConfigMaps are recognizer-owned content (device lists, node selectors) but 
 
 ### 4.2 Job specifics
 
-- **Runner assumptions.** The cluster has GitLab Runners registered with a docker or kubernetes executor. Runners must be pre-configured to trust the orac cluster root CA so they can `git clone` from GitLab over HTTPS and push to `registry.gitlab.orac.local`. This is a pre-req for the pipeline to work at all; see Section 8.
-- **Auth.** For OCI pushes (images AND chart) to `registry.gitlab.orac.local`, GitLab predefines `CI_REGISTRY_USER` + `CI_REGISTRY_PASSWORD` + `CI_REGISTRY`. `CI_JOB_TOKEN` is used only for the Release API (and for the HTTPS Helm package registry if we ever fall back to that path). Container-registry OCI pushes do not accept `CI_JOB_TOKEN` directly as a credential -- they need the username/password pair.
+- **Runner assumptions.** The cluster has GitLab Runners registered with a docker or kubernetes executor. Runners must be pre-configured to trust the orac cluster root CA so they can `git clone` from GitLab over HTTPS and push to `registry.orac.local`. This is a pre-req for the pipeline to work at all; see Section 8.
+- **Auth.** For OCI pushes (images AND chart) to `registry.orac.local`, GitLab predefines `CI_REGISTRY_USER` + `CI_REGISTRY_PASSWORD` + `CI_REGISTRY`. `CI_JOB_TOKEN` is used only for the Release API (and for the HTTPS Helm package registry if we ever fall back to that path). Container-registry OCI pushes do not accept `CI_JOB_TOKEN` directly as a credential -- they need the username/password pair.
 - **Multi-arch builds.** `docker buildx` with `linux/amd64,linux/arm64` (matching the GitHub workflow). Requires `docker:dind` as a service, or a buildkit pod if using the kubernetes executor.
 - **Image tag policy.**
   - `main` branch push -> tags `:latest` and `:main-<short-sha>`; no chart push.
   - `v*` semver tag -> images tagged `:<version>` (also `:latest` if this is a non-prerelease); chart packaged with matching version and pushed.
-- **Chart registry.** OCI via the project's container registry: `oci://registry.gitlab.orac.local/steve/recognizer/charts` (a prefix; the chart artifact is pushed as `recognizer` under that prefix). `helm push recognizer-<version>.tgz oci://registry.gitlab.orac.local/steve/recognizer/charts`. Flux consumes this via a `HelmRepository` source with `type: oci` (Section 5.1), matching the glovebox precedent. The project-level HTTPS Helm package registry is the documented fallback if OCI auth proves difficult (Section 11).
+- **Chart registry.** OCI via the project's container registry: `oci://registry.orac.local/steve/recognizer/charts` (a prefix; the chart artifact is pushed as `recognizer` under that prefix). `helm push recognizer-<version>.tgz oci://registry.orac.local/steve/recognizer/charts`. Flux consumes this via a `HelmRepository` source with `type: oci` (Section 5.1), matching the glovebox precedent. The project-level HTTPS Helm package registry is the documented fallback if OCI auth proves difficult (Section 11).
 - **Validation in `package:chart`.**
   - `helm lint charts/recognizer --strict`
   - `helm template charts/recognizer | kubeconform -strict -summary -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'`
@@ -230,7 +230,7 @@ metadata:
 spec:
   type: oci
   interval: 1h
-  url: oci://registry.gitlab.orac.local/steve/recognizer/charts
+  url: oci://registry.orac.local/steve/recognizer/charts
   secretRef:
     name: recognizer-registry-creds
 ```
@@ -274,7 +274,7 @@ spec:
       namespace: longhorn-system
   values:
     image:
-      registry: registry.gitlab.orac.local
+      registry: registry.orac.local
       repository: steve/recognizer
       pullSecrets:
         - name: recognizer-registry
@@ -316,7 +316,7 @@ Order matters only insofar as the namespace must exist before the ExternalSecret
 
 ### 5.5 Registry pull credential
 
-The cluster pulls the chart and the images from `registry.gitlab.orac.local`. Two separate credentials are needed:
+The cluster pulls the chart and the images from `registry.orac.local`. Two separate credentials are needed:
 
 - **Flux -> registry** (to pull the chart): the `recognizer-registry-creds` Secret referenced by the `HelmRepository(type: oci)` above. Created in the `flux-system` namespace.
 - **Pods -> registry** (to pull images): the `recognizer-registry` Secret referenced in `imagePullSecrets`. Created in the `recognizer` namespace.
@@ -357,8 +357,8 @@ When this work is complete and merged:
 
 1. `https://gitlab.orac.local/steve/recognizer` shows a green pipeline on `main`.
 2. Tagging `v0.1.0` on main triggers a pipeline that:
-   - Publishes `registry.gitlab.orac.local/steve/recognizer/document-scanner:0.1.0`, `.../notification-relay:0.1.0`, `.../optical-ripper:0.1.0` (multi-arch).
-   - Publishes the Helm chart at `oci://registry.gitlab.orac.local/steve/recognizer/charts/recognizer:0.1.0`.
+   - Publishes `registry.orac.local/steve/recognizer/document-scanner:0.1.0`, `.../notification-relay:0.1.0`, `.../optical-ripper:0.1.0` (multi-arch).
+   - Publishes the Helm chart at `oci://registry.orac.local/steve/recognizer/charts/recognizer:0.1.0`.
    - Creates a GitLab Release `v0.1.0` with changelog excerpt.
 3. The gitops repo has a `HelmRepository(type: oci)` entry appended to `clusters/orac/sources/helm-repositories.yaml`, `clusters/orac/apps/recognizer.yaml` (HelmRelease), `clusters/orac/apps/namespace-recognizer.yaml`, an ExternalSecret for the registry pull credential, the NFD worker ConfigMap, and the smarter-device-manager ConfigMap, all referenced from `clusters/orac/apps/kustomization.yaml`.
 4. Flux reconciles the `recognizer` HelmRelease. The `recognizer` namespace contains:
@@ -386,7 +386,7 @@ Each step should be a separate commit (or small series of commits) and runnable 
    - `kubectl get ns archiver` returns `NotFound` (no collision from the old name). If it exists, investigate what lives there before continuing.
    - `kubectl -n flux-system get sa` and verify Flux has registry-pull capability (depends on gitops-5sz being complete).
    - `nslookup gitlab.orac.local` from inside a cluster pod (or `kubectl run --rm -it -- busybox nslookup gitlab.orac.local`) returns the expected address. Flux reconcilers live in-cluster and need cluster DNS to resolve it.
-   - Manually `helm pull oci://registry.gitlab.orac.local/steve/recognizer/charts/recognizer --version 0.1.0` from a pod with the registry credentials to confirm the pull path works independently of Flux. This is cheap and catches credential/CA/OCI-support issues in isolation.
+   - Manually `helm pull oci://registry.orac.local/steve/recognizer/charts/recognizer --version 0.1.0` from a pod with the registry credentials to confirm the pull path works independently of Flux. This is cheap and catches credential/CA/OCI-support issues in isolation.
 9. **Add gitops entries.** In the gitops repo: append the `HelmRepository(type: oci)` to `clusters/orac/sources/helm-repositories.yaml`, add `clusters/orac/apps/recognizer.yaml` (HelmRelease), `clusters/orac/apps/namespace-recognizer.yaml`, and register them in `clusters/orac/apps/kustomization.yaml`. Add the NFD worker ConfigMap and device-plugin ConfigMap as standalone gitops resources (see Section 3.3). Commit and push. Flux reconciles within the `interval` on the cluster Kustomization.
 10. **Verify cluster state.** `flux get sources helm -n flux-system`, `flux get helmreleases -n recognizer`, `kubectl -n recognizer get pods`. All `Ready` / all `Running`. Cross-check that `kubectl -n node-feature-discovery get cm` and `kubectl -n capture get cm` show the expected configs.
 11. **Cut `v0.1.0`.** Update `CHANGELOG.md`, tag, push. Verify the full pipeline publishes images + chart + release. Bump the version string in `clusters/orac/apps/recognizer.yaml` in gitops to pick up the release (glovebox-style).
@@ -394,11 +394,11 @@ Each step should be a separate commit (or small series of commits) and runnable 
 
 ## 11. Risks and Open Questions
 
-- **GitLab Runner CA trust (Section 8.1)** is the most common failure mode. If runners cannot trust the self-signed cluster CA, every job fails at `git clone`. The CA must cover BOTH `gitlab.orac.local` (git/API) AND `registry.gitlab.orac.local` (image and chart pushes/pulls). Verify before burning cycles on pipeline debugging.
+- **GitLab Runner CA trust (Section 8.1)** is the most common failure mode. If runners cannot trust the self-signed cluster CA, every job fails at `git clone`. The CA must cover BOTH `gitlab.orac.local` (git/API) AND `registry.orac.local` (image and chart pushes/pulls). Verify before burning cycles on pipeline debugging.
 - **`helm push` to GitLab's container registry** requires that the installed GitLab version supports the OCI artifact types used for Helm charts, and a runner-side `helm` >= 3.8. Confirm the GitLab version on `gitlab.orac.local` before committing; do not cite a minimum version without checking. If OCI push fails, fall back to the HTTPS Helm package registry (next item).
-- **Flux `HelmRepository(type: oci)` + GitLab registry auth.** The glovebox precedent pulls from `ghcr.io`, which is known-good for this cluster. Pulling from `registry.gitlab.orac.local` exercises a different auth path (deploy token vs. GHCR token) and uses the self-signed cluster CA. The fallback is a `HelmRepository` against GitLab's HTTPS Helm package registry (`https://gitlab.orac.local/api/v4/projects/<id>/packages/helm/<channel>`). The chart and CI stay the same -- only the source `url` and `type` change in gitops.
-- **`registry.gitlab.orac.local` in-cluster resolvability.** CoreDNS or split-horizon DNS may not resolve `.orac.local` the same way from inside the cluster as from a workstation. Flux pods and kubelet pulls both need this to work. Pre-flight covered in Section 10.8.
-- **Kubelet image pull.** Same DNS + CA trust story applies to every node in the cluster when kubelet pulls `registry.gitlab.orac.local/steve/recognizer/*`. If the cluster CA isn't on nodes (or node containerd config), image pulls fail with cert errors. Test with a throwaway Pod pulling a known image from the same host before rolling out.
+- **Flux `HelmRepository(type: oci)` + GitLab registry auth.** The glovebox precedent pulls from `ghcr.io`, which is known-good for this cluster. Pulling from `registry.orac.local` exercises a different auth path (deploy token vs. GHCR token) and uses the self-signed cluster CA. The fallback is a `HelmRepository` against GitLab's HTTPS Helm package registry (`https://gitlab.orac.local/api/v4/projects/<id>/packages/helm/<channel>`). The chart and CI stay the same -- only the source `url` and `type` change in gitops.
+- **`registry.orac.local` in-cluster resolvability.** CoreDNS or split-horizon DNS may not resolve `.orac.local` the same way from inside the cluster as from a workstation. Flux pods and kubelet pulls both need this to work. Pre-flight covered in Section 10.8.
+- **Kubelet image pull.** Same DNS + CA trust story applies to every node in the cluster when kubelet pulls `registry.orac.local/steve/recognizer/*`. If the cluster CA isn't on nodes (or node containerd config), image pulls fail with cert errors. Test with a throwaway Pod pulling a known image from the same host before rolling out.
 - **GitLab deploy token scope.** A read-only deploy token needs `read_registry` for container pulls. If we ever fall back to the HTTPS Helm package registry, that needs a separate `read_package_registry` scope. A single token with both is fine but must be created with both scopes explicitly. Don't assume "read_registry covers everything."
 - **Pod imagePullSecret admission.** If the cluster already injects pull secrets via kyverno or a default-serviceaccount mutation, the chart's per-pod `imagePullSecrets` reference is redundant (harmless, but worth knowing). Check before building.
 - **Multi-arch builds on the runner** need QEMU binfmt registered, or a runner pool with both amd64 and arm64 nodes. If neither is set up, drop to amd64-only in v1 and fix later. Note: `docker buildx build --push=false --platform linux/amd64,linux/arm64` does NOT load multi-arch images into the local daemon -- the dry-run will build and discard; images are not locally inspectable afterward.

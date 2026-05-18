@@ -7,7 +7,7 @@
 **Spec:** `docs/specs/02-recognizer-gitlab-deploy.md`
 **Beads:** `archiver-8j9` (this repo), depends on `gitops-5sz` (sibling repo) for cluster-side pull credentials.
 
-**Architecture:** One umbrella Helm chart at `charts/recognizer/` packages the three workloads (document-scanner, notification-relay, optical-ripper) plus app-adjacent resources. `.gitlab-ci.yml` runs tests, builds multi-arch images, packages the chart, pushes both to `registry.gitlab.orac.local/steve/recognizer/`. Flux on the cluster pulls from a `HelmRepository(type: oci)` source -- mirroring the `glovebox` precedent already in use.
+**Architecture:** One umbrella Helm chart at `charts/recognizer/` packages the three workloads (document-scanner, notification-relay, optical-ripper) plus app-adjacent resources. `.gitlab-ci.yml` runs tests, builds multi-arch images, packages the chart, pushes both to `registry.orac.local/steve/recognizer/`. Flux on the cluster pulls from a `HelmRepository(type: oci)` source -- mirroring the `glovebox` precedent already in use.
 
 **Tech Stack:** Helm 3.8+ (OCI), `docker buildx`, GitLab CI shared runners with docker+dind, Flux v2 (`helm.toolkit.fluxcd.io/v2`), kubeconform for schema validation.
 
@@ -223,7 +223,7 @@ sources:
 
 ```yaml
 image:
-  registry: registry.gitlab.orac.local
+  registry: registry.orac.local
   repository: steve/recognizer
   pullPolicy: IfNotPresent
   pullSecrets:
@@ -1171,9 +1171,9 @@ After the merge runs on `main`:
 
 ```bash
 # From the workstation, authenticate to the registry first if not already:
-docker login registry.gitlab.orac.local
-docker pull registry.gitlab.orac.local/steve/recognizer/document-scanner:latest
-docker inspect registry.gitlab.orac.local/steve/recognizer/document-scanner:latest | grep -E 'Architecture|Os'
+docker login registry.orac.local
+docker pull registry.orac.local/steve/recognizer/document-scanner:latest
+docker inspect registry.orac.local/steve/recognizer/document-scanner:latest | grep -E 'Architecture|Os'
 ```
 
 Expected: image is multi-arch (docker inspect reveals a `Manifests` list containing both amd64 and arm64).
@@ -1240,7 +1240,7 @@ Open `https://gitlab.orac.local/steve/recognizer/-/pipelines`. Expected:
 - [ ] **Step 3: Verify chart pull works**
 
 ```bash
-helm pull oci://registry.gitlab.orac.local/steve/recognizer/charts/recognizer --version 0.0.1-rc.1
+helm pull oci://registry.orac.local/steve/recognizer/charts/recognizer --version 0.0.1-rc.1
 ls -l recognizer-0.0.1-rc.1.tgz
 tar tzf recognizer-0.0.1-rc.1.tgz | head
 ```
@@ -1308,7 +1308,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: probe
-      image: registry.gitlab.orac.local/steve/recognizer/document-scanner:latest
+      image: registry.orac.local/steve/recognizer/document-scanner:latest
       command: ["sleep", "30"]
   imagePullSecrets:
     - name: recognizer-registry-test
@@ -1385,7 +1385,7 @@ Add a new entry under `## [Unreleased]` or bump the next-version section:
 ### Changed
 - Build and release pipeline moved from GitHub Actions + GHCR to GitLab CI + gitlab.orac.local container registry.
 - Kubernetes manifests replaced by a Helm chart at `charts/recognizer/`; cluster deployment now via Flux in the sibling gitops repo.
-- Images republished as `registry.gitlab.orac.local/steve/recognizer/{document-scanner,notification-relay}`.
+- Images republished as `registry.orac.local/steve/recognizer/{document-scanner,notification-relay}`.
 
 ### Removed
 - `manifests/` directory (replaced by chart)
@@ -1450,7 +1450,7 @@ metadata:
 spec:
   type: oci
   interval: 1h
-  url: oci://registry.gitlab.orac.local/steve/recognizer/charts
+  url: oci://registry.orac.local/steve/recognizer/charts
   secretRef:
     name: recognizer-registry-creds
 ```
@@ -1530,7 +1530,7 @@ spec:
       namespace: longhorn-system
   values:
     image:
-      registry: registry.gitlab.orac.local
+      registry: registry.orac.local
       repository: steve/recognizer
       pullSecrets:
         - name: recognizer-registry
@@ -1777,8 +1777,8 @@ Expected: test, build (images tagged `0.1.0` and `latest`), package (chart `0.1.
 - [ ] **Step 3: Verify**
 
 ```bash
-docker pull registry.gitlab.orac.local/steve/recognizer/document-scanner:0.1.0
-helm pull oci://registry.gitlab.orac.local/steve/recognizer/charts/recognizer --version 0.1.0
+docker pull registry.orac.local/steve/recognizer/document-scanner:0.1.0
+helm pull oci://registry.orac.local/steve/recognizer/charts/recognizer --version 0.1.0
 ```
 
 Both succeed.
@@ -1822,7 +1822,7 @@ flux reconcile helmrelease recognizer -n recognizer --with-source
 flux get hr -n recognizer
 ```
 
-Exit criteria: HelmRelease `READY: True` at `revision: 0.1.0`; pods running with images from `registry.gitlab.orac.local/steve/recognizer/*:0.1.0`.
+Exit criteria: HelmRelease `READY: True` at `revision: 0.1.0`; pods running with images from `registry.orac.local/steve/recognizer/*:0.1.0`.
 
 ### Task G4: Close tracking beads
 
@@ -1893,8 +1893,8 @@ Re-ordered: **F1-F6 run before E1**, so the gitops repo gets its ConfigMap conte
 Reconfirming spec Section 9:
 
 - [ ] `https://gitlab.orac.local/steve/recognizer` shows a green pipeline on main
-- [ ] `docker pull registry.gitlab.orac.local/steve/recognizer/{document-scanner,notification-relay}:0.1.0` succeeds on a workstation authenticated to the GitLab registry
-- [ ] `helm pull oci://registry.gitlab.orac.local/steve/recognizer/charts/recognizer --version 0.1.0` succeeds
+- [ ] `docker pull registry.orac.local/steve/recognizer/{document-scanner,notification-relay}:0.1.0` succeeds on a workstation authenticated to the GitLab registry
+- [ ] `helm pull oci://registry.orac.local/steve/recognizer/charts/recognizer --version 0.1.0` succeeds
 - [ ] `flux get hr -n recognizer` shows `READY: True`, `revision: 0.1.0`
 - [ ] `kubectl -n recognizer get pods` shows all workloads running
 - [ ] `kubectl -n node-feature-discovery get cm nfd-worker-config` exists
