@@ -137,7 +137,10 @@ helm:lint:
     - if [ "$CI_COMMIT_REF_NAME" != "main" ] && [ -z "$CI_COMMIT_TAG" ]; then PUSH_FLAG="--no-push"; fi
     - echo "Build destinations:" $DEST_ARGS
     - echo "Push mode:" "${PUSH_FLAG:-PUSH}"
-    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/${DOCKERFILE}" $DEST_ARGS $PUSH_FLAG --verbosity info
+    # --skip-tls-verify-registry: the orac cluster root CA isn't in kaniko's
+    # trust store. Tracked as gitops-gr30 for the permanent fix (mount the CA
+    # ConfigMap into all build pods via the runner config).
+    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/${DOCKERFILE}" $DEST_ARGS $PUSH_FLAG --skip-tls-verify-registry "$CI_REGISTRY" --verbosity info
 
 build:document-scanner:
   extends: .build
@@ -183,10 +186,12 @@ package:chart:
     # Push chart on v* tags only. The OCI prefix matches what Flux's
     # HelmRepository points at; full artifact URL becomes
     # oci://$CI_REGISTRY/steve/recognizer/charts/recognizer:$VERSION
+    # Same CA-trust caveat as kaniko (gitops-gr30). --insecure on the login
+    # step makes helm tolerate the unknown CA; helm push reuses the saved auth.
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
-        echo "$CI_REGISTRY_PASSWORD" | helm registry login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-        helm push recognizer-*.tgz "oci://${CI_REGISTRY}/steve/recognizer/charts"
+        echo "$CI_REGISTRY_PASSWORD" | helm registry login --insecure -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+        helm push recognizer-*.tgz "oci://${CI_REGISTRY}/steve/recognizer/charts" --insecure-skip-tls-verify
       else
         echo "Non-tag build (ref=$CI_COMMIT_REF_NAME); chart not pushed."
       fi
