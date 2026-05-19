@@ -1,3 +1,22 @@
+# =============================================================================
+# recognizer chart values.
+#
+# READ THE README BEFORE CHANGING DEFAULTS.
+#   helm show readme oci://registry.orac.local/steve/recognizer/charts/recognizer
+#
+# Critical cluster prerequisites (not deployed by this chart):
+#   - node-feature-discovery (NFD) operator -- produces the
+#     recognizer.io/device-* labels that the DaemonSets nodeSelect on.
+#   - smarter-device-manager -- satisfies the smarter-devices/* resource
+#     limits used to expose /dev/sr*, /dev/sg*, /dev/bus/usb to pods.
+#   - external-secrets-operator + ClusterSecretStore named vault-backend.
+#   - A StorageClass matching storage.<backend>.storageClassName.
+#   - An imagePullSecret in the release namespace.
+#
+# If any prereq is missing, disable the affected workload via *.enabled: false
+# until it lands. notification-relay has no hardware deps and always works.
+# =============================================================================
+
 image:
   registry: registry.orac.local
   repository: steve/recognizer

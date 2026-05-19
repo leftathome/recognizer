@@ -1,0 +1,53 @@
+recognizer {{ .Chart.AppVersion }} installed in namespace "{{ .Release.Namespace }}".
+
+Storage backend: {{ .Values.storage.backend }}
+{{- if eq .Values.storage.backend "longhorn" }}
+  Dynamic provisioning from StorageClass: {{ .Values.storage.longhorn.storageClassName }}
+  Size: {{ .Values.storage.size }} ({{ .Values.storage.accessModes | toJson }})
+{{- else if eq .Values.storage.backend "nfs" }}
+  NFS server: {{ .Values.storage.nfs.server }}{{ .Values.storage.nfs.path }}
+  PV reclaim policy: {{ .Values.storage.nfs.reclaimPolicy }}
+{{- else if eq .Values.storage.backend "existing" }}
+  Using pre-existing PVC: {{ .Values.storage.existing.claimName }}
+{{- end }}
+
+Workloads enabled:
+{{- if .Values.documentScanner.enabled }}
+  - document-scanner (DaemonSet)
+    nodeSelector: {{ .Values.documentScanner.nodeSelector | toJson }}
+    needs:        NFD running + nodes labeled with the keys above
+                  smarter-device-manager exposing /dev/bus/usb to pods
+{{- else }}
+  - document-scanner: DISABLED
+{{- end }}
+{{- if .Values.notificationRelay.enabled }}
+  - notification-relay (Deployment, replicas={{ .Values.notificationRelay.replicaCount }})
+    no node selector or device dependency
+{{- else }}
+  - notification-relay: DISABLED
+{{- end }}
+{{- if .Values.opticalRipper.enabled }}
+  - optical-ripper (DaemonSet)
+    nodeSelector: {{ .Values.opticalRipper.nodeSelector | toJson }}
+    needs:        NFD running + nodes labeled with the keys above
+                  smarter-device-manager exposing /dev/sr* and /dev/sg* to pods
+{{- else }}
+  - optical-ripper: DISABLED
+{{- end }}
+
+If DaemonSet pods stay Pending, the most common causes are:
+
+  1. NFD isn't installed or its worker rules don't produce the labels
+     this chart's nodeSelectors expect. Verify with:
+       kubectl get nodes -l {{ if .Values.opticalRipper.enabled }}{{ .Values.opticalRipper.nodeSelector | keys | first }}{{ else }}{{ .Values.documentScanner.nodeSelector | keys | first }}{{ end }}
+     If empty, NFD is not configured for this hardware -- see the chart README "Cluster prerequisites".
+
+  2. smarter-device-manager isn't running on the target node. Pod admission
+     fails with "Insufficient smarter-devices/...". Check the smarter-devices
+     resource availability on the target node:
+       kubectl describe node <node> | grep smarter-devices
+
+  3. The PVC isn't bound. Check:
+       kubectl -n {{ .Release.Namespace }} get pvc {{ include "recognizer.fullname" . }}-data
+
+Full chart docs: helm show readme oci://registry.orac.local/steve/recognizer/charts/recognizer --version {{ .Chart.AppVersion }} --insecure-skip-tls-verify
