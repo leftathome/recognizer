@@ -1,0 +1,93 @@
+image:
+  registry: registry.orac.local
+  repository: steve/recognizer
+  pullPolicy: IfNotPresent
+  pullSecrets:
+    - name: recognizer-registry
+
+createNamespace: false
+
+commonLabels: {}
+commonAnnotations: {}
+
+nfs:
+  enabled: true
+  server: ""
+  path: /mnt/tank/recognizer
+  storageClassName: nfs-recognizer
+  capacity: 1Ti
+  reclaimPolicy: Retain
+
+networkPolicies:
+  enabled: true
+
+monitoring:
+  enabled: true
+
+documentScanner:
+  enabled: true
+  image:
+    name: document-scanner
+    tag: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+      # Reserve one USB bus on the node via smarter-device-manager.
+      # Without this, the pod schedules but the scanner hardware is
+      # not passed through. Matches source manifests/document-scanner/daemonset.yaml.
+      smarter-devices/bus-usb: 1
+  # Pins to nodes labeled by NFD when the Epson DS-1630 USB device is plugged in.
+  # See gitops configmap-nfd-worker-recognizer.yaml for the NFD rule that
+  # generates this label. Override this selector to support additional scanner
+  # models (each NFD rule produces a distinct recognizer.io/device-scanner label value).
+  nodeSelector:
+    recognizer.io/device-scanner: epson-ds-1630
+
+notificationRelay:
+  enabled: true
+  image:
+    name: notification-relay
+    tag: ""
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+opticalRipper:
+  enabled: true
+  # NOTE: opticalRipper uses an upstream Docker Hub image, NOT one we build.
+  # Its image schema (repository + tag) intentionally differs from
+  # documentScanner/notificationRelay (which use name + tag composed via the
+  # recognizer.image helper). Templates must render this image inline:
+  #   image: "{{ .Values.opticalRipper.image.repository }}:{{ .Values.opticalRipper.image.tag }}"
+  # NOT via the recognizer.image helper.
+  image:
+    repository: automaticrippingmachine/automatic-ripping-machine
+    tag: "2.6.0"
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+      # Reserve the optical drive (sr0) and SCSI generic device (sg0) on the
+      # node via smarter-device-manager. ARM needs both to read discs and
+      # eject the tray. Matches source manifests/optical-ripper/daemonset.yaml.
+      smarter-devices/sr0: 1
+      smarter-devices/sg0: 1
+  # Pins to nodes labeled by NFD when the Pioneer BDR-XS07UHD optical drive
+  # is plugged in. See gitops configmap-nfd-worker-recognizer.yaml for the
+  # NFD rule that generates this label. Override to support additional
+  # drive models (each NFD rule produces a distinct
+  # recognizer.io/device-optical-drive label value).
+  nodeSelector:
+    recognizer.io/device-optical-drive: pioneer-bdr-xs07uhd

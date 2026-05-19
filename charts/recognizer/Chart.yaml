@@ -1,0 +1,17 @@
+apiVersion: v2
+name: recognizer
+description: Homelab archiver -- document scanners, optical rippers, notification relay
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.30.0-0"
+maintainers:
+  - name: Steve Wagner
+    email: leftathome@gmail.com
+keywords:
+  - archive
+  - capture
+  - homelab
+home: https://gitlab.orac.local/steve/recognizer
+sources:
+  - https://gitlab.orac.local/steve/recognizer

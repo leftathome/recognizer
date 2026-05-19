@@ -1,0 +1,237 @@
+stages:
+  - test
+  - build
+  - package
+  - release
+
+variables:
+  GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
+  GOPATH: "$CI_PROJECT_DIR/.cache/go"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  # Defaults applied to every job. The runner's chart-level defaults are very
+  # small; explicit values here let each job request what it actually needs.
+  # Override per-job by re-declaring the variable in a job's `variables:` block.
+  KUBERNETES_CPU_REQUEST: "250m"
+  KUBERNETES_CPU_LIMIT: "1"
+  KUBERNETES_MEMORY_REQUEST: "512Mi"
+  KUBERNETES_MEMORY_LIMIT: "1Gi"
+  KUBERNETES_HELPER_CPU_REQUEST: "100m"
+  KUBERNETES_HELPER_CPU_LIMIT: "500m"
+  KUBERNETES_HELPER_MEMORY_REQUEST: "128Mi"
+  KUBERNETES_HELPER_MEMORY_LIMIT: "256Mi"
+  # The runner's helper image is currently pinned to x86_64 only; arm64
+  # nodes can't pull it. Constrain build pods to amd64 nodes until the
+  # platform team makes the helper-image tag dynamic per node arch.
+  KUBERNETES_NODE_SELECTOR_arch: "kubernetes.io/arch=amd64"
+
+.cache:
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths:
+      - .cache/
+
+test:python:
+  stage: test
+  image: python:3.12-slim
+  extends: .cache
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+    - curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin/ kubeconform
+    - pip install -r requirements.txt
+  script:
+    - pytest tests/ -v --tb=short --junitxml=report-python.xml
+  # Artifact uploads currently return 405 from gitlab.orac.local while the
+  # platform team finishes the gitaly/object-storage migration. Keep the
+  # XML for re-enabling later.
+
+test:go:
+  stage: test
+  image: golang:1.26.3-bookworm
+  extends: .cache
+  variables:
+    GO_MODULE_DIR: images/document-scanner/scanner-session-manager
+    # `go test -race` doubles memory footprint; allow more headroom.
+    KUBERNETES_CPU_REQUEST: "500m"
+    KUBERNETES_CPU_LIMIT: "2"
+    KUBERNETES_MEMORY_REQUEST: "1Gi"
+    KUBERNETES_MEMORY_LIMIT: "3Gi"
+  before_script:
+    # `go install` puts binaries in $GOPATH/bin; that path is NOT on $PATH by default.
+    - export PATH="$PATH:$(go env GOPATH)/bin"
+    - go install github.com/jstemmer/go-junit-report/v2@latest
+  script:
+    - export PATH="$PATH:$(go env GOPATH)/bin"
+    - cd "$GO_MODULE_DIR"
+    - go vet ./...
+    - go test ./... -count=1 -race -v 2>&1 | go-junit-report -set-exit-code > "$CI_PROJECT_DIR/report-go.xml"
+
+vuln:go:
+  stage: test
+  image: golang:1.26.3-bookworm
+  extends: .cache
+  variables:
+    # govulncheck downloads the vulnerability database into memory.
+    KUBERNETES_MEMORY_REQUEST: "1Gi"
+    KUBERNETES_MEMORY_LIMIT: "2Gi"
+  before_script:
+    - export PATH="$PATH:$(go env GOPATH)/bin"
+    - go install golang.org/x/vuln/cmd/govulncheck@latest
+  script:
+    - export PATH="$PATH:$(go env GOPATH)/bin"
+    - cd images/document-scanner/scanner-session-manager
+    - govulncheck ./...
+  allow_failure: false
+
+scan:trivy-fs:
+  stage: test
+  image: aquasec/trivy:latest
+  script:
+    - trivy fs --exit-code 1 --severity HIGH,CRITICAL --no-progress .
+  allow_failure: false
+
+helm:lint:
+  stage: test
+  image:
+    name: alpine/helm:3.14.4
+    entrypoint: [""]
+  script:
+    - helm lint charts/recognizer
+    # Pin --kube-version to the actual orac cluster version. Helm's offline
+    # `template` defaults to the version compiled into the helm binary
+    # (1.29 for alpine/helm:3.14.4), but the chart requires kubeVersion >=1.30.
+    - helm template recognizer charts/recognizer --kube-version 1.34.0 --set nfs.server=nas.orac.local --namespace recognizer > render.yaml
+    - wc -l render.yaml
+
+# ---------------------------------------------------------------------------
+# C2: build stage (push=false smoke test).
+#
+# Note: the cluster's GitLab Runner config has `privileged = false`, so
+# `docker:27-dind` services don't initialize and `docker buildx` can't run.
+# Using kaniko (rootless, no daemon) for amd64-only builds. Multi-arch is
+# deferred until the runner allows privileged services; tracked as
+# gitops-vney.
+# ---------------------------------------------------------------------------
+
+.build:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  variables:
+    KUBERNETES_CPU_REQUEST: "500m"
+    KUBERNETES_CPU_LIMIT: "2"
+    KUBERNETES_MEMORY_REQUEST: "1Gi"
+    KUBERNETES_MEMORY_LIMIT: "4Gi"
+  before_script:
+    # Kaniko reads registry creds from /kaniko/.docker/config.json. The CI
+    # variables CI_REGISTRY{,_USER,_PASSWORD} are predefined by GitLab.
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"username\":\"${CI_REGISTRY_USER}\",\"password\":\"${CI_REGISTRY_PASSWORD}\"}}}" > /kaniko/.docker/config.json
+  script:
+    # Always tag :<short-sha>. Add :latest + :main-<sha> on main. Add :<version> on v* tags.
+    - DEST_ARGS="--destination ${CI_REGISTRY_IMAGE}/${COMPONENT}:${CI_COMMIT_SHORT_SHA}"
+    - if [ "$CI_COMMIT_REF_NAME" = "main" ]; then DEST_ARGS="$DEST_ARGS --destination ${CI_REGISTRY_IMAGE}/${COMPONENT}:latest --destination ${CI_REGISTRY_IMAGE}/${COMPONENT}:main-${CI_COMMIT_SHORT_SHA}"; fi
+    - if [ -n "$CI_COMMIT_TAG" ]; then VERSION="${CI_COMMIT_TAG#v}"; DEST_ARGS="$DEST_ARGS --destination ${CI_REGISTRY_IMAGE}/${COMPONENT}:${VERSION}"; fi
+    # Push only on main + tags. Feature branches build to verify but discard.
+    - PUSH_FLAG=""
+    - if [ "$CI_COMMIT_REF_NAME" != "main" ] && [ -z "$CI_COMMIT_TAG" ]; then PUSH_FLAG="--no-push"; fi
+    - echo "Build destinations:" $DEST_ARGS
+    - echo "Push mode:" "${PUSH_FLAG:-PUSH}"
+    # --skip-tls-verify-registry: the orac cluster root CA isn't in kaniko's
+    # trust store. Tracked as gitops-gr30 for the permanent fix (mount the CA
+    # ConfigMap into all build pods via the runner config).
+    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/${DOCKERFILE}" $DEST_ARGS $PUSH_FLAG --skip-tls-verify-registry "$CI_REGISTRY" --verbosity info
+
+build:document-scanner:
+  extends: .build
+  variables:
+    DOCKERFILE: images/document-scanner/Dockerfile
+    COMPONENT: document-scanner
+
+build:notification-relay:
+  extends: .build
+  variables:
+    DOCKERFILE: images/notification-relay/Dockerfile
+    COMPONENT: notification-relay
+
+# ---------------------------------------------------------------------------
+# C3: package stage. helm lint --strict + kubeconform (with CRDs catalog) +
+# helm package. No push yet -- D2 wires that up.
+# ---------------------------------------------------------------------------
+
+package:chart:
+  stage: package
+  image:
+    name: alpine/helm:3.14.4
+    entrypoint: [""]
+  variables:
+    KUBERNETES_CPU_REQUEST: "250m"
+    KUBERNETES_CPU_LIMIT: "1"
+    KUBERNETES_MEMORY_REQUEST: "256Mi"
+    KUBERNETES_MEMORY_LIMIT: "512Mi"
+  before_script:
+    - apk add --no-cache curl ca-certificates
+    - curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin/ kubeconform
+  script:
+    # Derive chart version from tag (e.g. v1.2.3 -> 1.2.3) or commit-sha for branch builds.
+    - VERSION="${CI_COMMIT_TAG:-0.0.0-$CI_COMMIT_SHORT_SHA}"
+    - VERSION="${VERSION#v}"
+    - echo "Packaging chart at version $VERSION"
+    - helm lint charts/recognizer --strict
+    # Single-line on purpose: YAML folded scalars (`>`) keep deeper-indented
+    # lines as newlines, which would split the pipe into separate commands.
+    - helm template recognizer charts/recognizer --kube-version 1.34.0 --set nfs.server=nas.orac.local --namespace recognizer | kubeconform -strict -summary -ignore-missing-schemas -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+    - helm package charts/recognizer --version "$VERSION" --app-version "$VERSION" --destination .
+    - ls -lh recognizer-*.tgz
+    # Push chart on v* tags only. The OCI prefix matches what Flux's
+    # HelmRepository points at; full artifact URL becomes
+    # oci://$CI_REGISTRY/steve/recognizer/charts/recognizer:$VERSION
+    # Same CA-trust caveat as kaniko (gitops-gr30). --insecure on the login
+    # step makes helm tolerate the unknown CA; helm push reuses the saved auth.
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        echo "$CI_REGISTRY_PASSWORD" | helm registry login --insecure -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+        helm push recognizer-*.tgz "oci://${CI_REGISTRY}/steve/recognizer/charts" --insecure-skip-tls-verify
+      else
+        echo "Non-tag build (ref=$CI_COMMIT_REF_NAME); chart not pushed."
+      fi
+
+# ---------------------------------------------------------------------------
+# C4: release stage (tag-triggered only). Creates a GitLab Release with the
+# changelog excerpt as the description. Will only run on v* tags.
+# ---------------------------------------------------------------------------
+
+release:gitlab:
+  stage: release
+  # alpine base: has curl + ash; small. We bypass release-cli/glab entirely
+  # because they hit the same cluster-CA TLS issue (gitops-gr30) and don't
+  # expose an obvious skip-tls knob via GitLab's `release:` keyword.
+  image: alpine:3.21
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+/
+  variables:
+    KUBERNETES_CPU_REQUEST: "100m"
+    KUBERNETES_CPU_LIMIT: "500m"
+    KUBERNETES_MEMORY_REQUEST: "128Mi"
+    KUBERNETES_MEMORY_LIMIT: "256Mi"
+  before_script:
+    - apk add --no-cache curl gawk jq
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md > release-notes.md
+    - cat release-notes.md
+    # Build the JSON payload (jq -Rs '.' reads stdin as a JSON string).
+    - >
+      jq -n
+      --arg name "$CI_COMMIT_TAG"
+      --arg tag "$CI_COMMIT_TAG"
+      --rawfile desc release-notes.md
+      '{name: $name, tag_name: $tag, description: $desc}'
+      > release-payload.json
+    - >
+      curl -sk -X POST
+      -H "JOB-TOKEN: $CI_JOB_TOKEN"
+      -H "Content-Type: application/json"
+      --data @release-payload.json
+      -w "\nHTTP %{http_code}\n"
+      "https://gitlab.orac.local/api/v4/projects/${CI_PROJECT_ID}/releases"

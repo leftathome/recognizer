@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Helm chart** `charts/recognizer/` packaging all three workloads
+  (document-scanner, notification-relay, optical-ripper) plus shared
+  resources (namespace, NFS PV/PVC, NetworkPolicies, monitoring).
+- **GitLab CI pipeline** (`.gitlab-ci.yml`): test, build, package, release
+  stages. Multi-stage with kaniko-based image builds (amd64 only for now)
+  and OCI Helm chart push to `registry.orac.local`.
+
+### Changed
+
+- Migrated build + release pipeline from GitHub Actions + GHCR to GitLab
+  CI on `gitlab.orac.local`. Images now published to
+  `registry.orac.local/steve/recognizer/{document-scanner,notification-relay}`.
+  Chart published to `oci://registry.orac.local/steve/recognizer/charts/recognizer`.
+- Renamed `openclaw.io/device-*` NFD labels to `recognizer.io/device-*`
+  and `app.kubernetes.io/part-of: capture-framework` to `recognizer`
+  (vestigial labels from before the project split off).
+
+### Removed
+
+- `manifests/` directory (replaced by the Helm chart).
+- `.github/workflows/` (replaced by `.gitlab-ci.yml`).
+- `tests/test_manifests.py`, `tests/test_layer1_manifests.py`,
+  `tests/test_document_scanner.py`, `tests/test_optical_ripper.py` --
+  these tested the static `manifests/` files; that role is now served
+  by `helm:lint` + `kubeconform` in CI against the chart's rendered
+  output.
+
 ## [0.1.0] - 2026-04-05
 
 ### Added

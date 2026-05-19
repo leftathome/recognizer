@@ -1,0 +1,24 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "recognizer.fullname" . }}-workloads
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "recognizer.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: web-ui
+      interval: 30s
+      path: /metrics
+    - port: http
+      interval: 30s
+      path: /metrics
+{{- end }}

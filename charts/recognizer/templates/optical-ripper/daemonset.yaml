@@ -1,0 +1,68 @@
+{{- if .Values.opticalRipper.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "recognizer.fullname" . }}-optical-ripper
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: optical-ripper
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "recognizer.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: optical-ripper
+  template:
+    metadata:
+      labels:
+        {{- include "recognizer.labels" . | nindent 8 }}
+        app.kubernetes.io/component: optical-ripper
+    spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      nodeSelector:
+        {{- toYaml .Values.opticalRipper.nodeSelector | nindent 8 }}
+      containers:
+        - name: arm
+          image: "{{ .Values.opticalRipper.image.repository }}:{{ .Values.opticalRipper.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: ARM_UID
+              value: "1000"
+            - name: ARM_GID
+              value: "1000"
+            - name: KEY
+              valueFrom:
+                secretKeyRef:
+                  name: makemkv-license
+                  key: license-key
+            - name: OMDB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: omdb-api
+                  key: api-key
+          resources:
+            {{- toYaml .Values.opticalRipper.resources | nindent 12 }}
+          volumeMounts:
+            - name: incoming
+              mountPath: /out
+            - name: arm-config
+              mountPath: /etc/arm/config
+            - name: arm-home
+              mountPath: /home/arm
+          ports:
+            - name: web-ui
+              containerPort: 8080
+      volumes:
+        - name: incoming
+          persistentVolumeClaim:
+            claimName: {{ include "recognizer.fullname" . }}-nfs
+        - name: arm-config
+          configMap:
+            name: {{ include "recognizer.fullname" . }}-arm-config
+        - name: arm-home
+          emptyDir: {}
+{{- end }}

@@ -1,0 +1,73 @@
+{{- if .Values.notificationRelay.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "recognizer.fullname" . }}-notification-relay
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notification-relay
+spec:
+  replicas: {{ .Values.notificationRelay.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "recognizer.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: notification-relay
+  template:
+    metadata:
+      labels:
+        {{- include "recognizer.labels" . | nindent 8 }}
+        app.kubernetes.io/component: notification-relay
+    spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: relay
+          image: {{ include "recognizer.image" (dict "root" $ "name" .Values.notificationRelay.image.name "tag" .Values.notificationRelay.image.tag) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: RELAY_PORT
+              value: "8080"
+            - name: DEAD_LETTER_DIR
+              value: /out/notifications/dead-letter
+            - name: RELAY_CONFIG_PATH
+              value: /etc/relay/config.yaml
+            - name: DISCORD_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-relay-tokens
+                  key: discord-webhook-url
+                  optional: true
+            - name: PUSHOVER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: notification-relay-tokens
+                  key: pushover-token
+                  optional: true
+          volumeMounts:
+            - name: incoming
+              mountPath: /out
+            - name: relay-config
+              mountPath: /etc/relay
+          resources:
+            {{- toYaml .Values.notificationRelay.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 30
+      volumes:
+        - name: incoming
+          persistentVolumeClaim:
+            claimName: {{ include "recognizer.fullname" . }}-nfs
+        - name: relay-config
+          configMap:
+            name: {{ include "recognizer.fullname" . }}-relay-config
+{{- end }}
