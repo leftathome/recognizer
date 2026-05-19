@@ -59,7 +59,7 @@ spec:
       volumes:
         - name: incoming
           persistentVolumeClaim:
-            claimName: {{ include "recognizer.fullname" . }}-nfs
+            claimName: {{ include "recognizer.dataClaimName" . }}
         - name: arm-config
           configMap:
             name: {{ include "recognizer.fullname" . }}-arm-config

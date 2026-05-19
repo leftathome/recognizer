@@ -1,0 +1,29 @@
+{{- /*
+  Static PV for the NFS backend. Only renders when storage.enabled=true AND
+  storage.backend=nfs. Longhorn (backend=longhorn) provisions volumes
+  dynamically from a StorageClass and needs no PV here. The `existing`
+  backend uses an operator-supplied PVC, also no PV here.
+
+  Carries helm.sh/resource-policy: keep so a chart uninstall does not
+  delete the PV (which would strand data on the NAS).
+*/ -}}
+{{- if and .Values.storage.enabled (eq .Values.storage.backend "nfs") }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ include "recognizer.fullname" . }}-data
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  capacity:
+    storage: {{ .Values.storage.size }}
+  accessModes:
+    {{- toYaml .Values.storage.accessModes | nindent 4 }}
+  persistentVolumeReclaimPolicy: {{ .Values.storage.nfs.reclaimPolicy }}
+  storageClassName: {{ .Values.storage.nfs.storageClassName }}
+  nfs:
+    server: {{ required "Set storage.nfs.server to the NFS server hostname or IP (required when storage.backend=nfs)" .Values.storage.nfs.server | quote }}
+    path: {{ .Values.storage.nfs.path | quote }}
+{{- end }}

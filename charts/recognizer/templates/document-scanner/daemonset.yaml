@@ -42,7 +42,7 @@ spec:
       volumes:
         - name: incoming
           persistentVolumeClaim:
-            claimName: {{ include "recognizer.fullname" . }}-nfs
+            claimName: {{ include "recognizer.dataClaimName" . }}
         - name: scanner-config
           configMap:
             name: {{ include "recognizer.fullname" . }}-scanner-config

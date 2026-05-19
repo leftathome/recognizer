@@ -10,13 +10,39 @@ createNamespace: false
 commonLabels: {}
 commonAnnotations: {}
 
-nfs:
+storage:
+  # When false, the chart renders no PV/PVC and the workloads will fail
+  # to schedule. Set false only if you are managing the PVC externally
+  # AND have already pointed `storage.existing.claimName` at it.
   enabled: true
-  server: ""
-  path: /mnt/tank/recognizer
-  storageClassName: nfs-recognizer
-  capacity: 1Ti
-  reclaimPolicy: Retain
+
+  # Which storage backend to use:
+  #   longhorn  — dynamic provisioning from a Longhorn StorageClass (default).
+  #               Workloads pin to specific nodes via NFD nodeSelectors, so
+  #               RWX is required. Longhorn provisions an NFS-share-manager
+  #               pod under the hood when `accessModes: [ReadWriteMany]`.
+  #   nfs       — static PV pointing at an external NFS export. Set
+  #               storage.nfs.server before deploying.
+  #   existing  — bring-your-own PVC. Skip chart-managed PV/PVC entirely;
+  #               point storage.existing.claimName at the pre-existing PVC.
+  backend: longhorn
+
+  # Capacity + access modes apply to backend=longhorn and backend=nfs.
+  size: 50Gi
+  accessModes:
+    - ReadWriteMany
+
+  # Backend-specific config. Only the block matching `backend` is used.
+  longhorn:
+    storageClassName: longhorn
+  nfs:
+    server: ""                       # required when backend=nfs
+    path: /mnt/tank/recognizer
+    storageClassName: nfs-recognizer
+    reclaimPolicy: Retain            # PV reclaim policy; chart-rendered PV
+                                     # also carries helm.sh/resource-policy: keep
+  existing:
+    claimName: ""                    # required when backend=existing
 
 networkPolicies:
   enabled: true

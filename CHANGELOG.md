@@ -7,14 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-19
+
+The first release published to `registry.orac.local`. Supersedes the
+2026-04-05 dev-only milestone (never published anywhere; entries below
+cover both the original feature work and the GitLab/Helm migration).
+
 ### Added
 
 - **Helm chart** `charts/recognizer/` packaging all three workloads
   (document-scanner, notification-relay, optical-ripper) plus shared
-  resources (namespace, NFS PV/PVC, NetworkPolicies, monitoring).
+  resources (namespace, NetworkPolicies, monitoring, capture-data
+  PV/PVC).
 - **GitLab CI pipeline** (`.gitlab-ci.yml`): test, build, package, release
   stages. Multi-stage with kaniko-based image builds (amd64 only for now)
   and OCI Helm chart push to `registry.orac.local`.
+- **Storage backend selector**: `values.storage.backend` chooses between
+  `longhorn` (default; dynamic RWX provisioning), `nfs` (static PV against
+  an external NFS export), and `existing` (bring-your-own PVC).
 
 ### Changed
 
@@ -25,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renamed `openclaw.io/device-*` NFD labels to `recognizer.io/device-*`
   and `app.kubernetes.io/part-of: capture-framework` to `recognizer`
   (vestigial labels from before the project split off).
+- `values.nfs.*` → `values.storage.*` with the new backend selector.
+  Workload templates now mount `<release>-data` (formerly `-nfs`) via a
+  `recognizer.dataClaimName` helper.
 
 ### Removed
 
@@ -36,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by `helm:lint` + `kubeconform` in CI against the chart's rendered
   output.
 
-## [0.1.0] - 2026-04-05
+### Original feature set (from the 2026-04-05 dev milestone)
 
 ### Added
 

@@ -1,0 +1,31 @@
+{{- /*
+  PVC for the shared capture-data volume. Renders for storage.backend of
+  `longhorn` (dynamic provisioning) and `nfs` (binds to the static PV
+  rendered by data-pv.yaml). Skipped entirely for backend=existing -- in
+  that case the operator pre-creates the PVC out of band and points
+  storage.existing.claimName at it.
+*/ -}}
+{{- if and .Values.storage.enabled (ne .Values.storage.backend "existing") }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "recognizer.fullname" . }}-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.storage.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.size }}
+  {{- if eq .Values.storage.backend "longhorn" }}
+  storageClassName: {{ .Values.storage.longhorn.storageClassName }}
+  {{- else if eq .Values.storage.backend "nfs" }}
+  storageClassName: {{ .Values.storage.nfs.storageClassName }}
+  # Bind to the chart-rendered static PV (data-pv.yaml).
+  volumeName: {{ include "recognizer.fullname" . }}-data
+  {{- end }}
+{{- end }}

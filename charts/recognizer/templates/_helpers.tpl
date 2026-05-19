@@ -48,3 +48,17 @@ inline as `"{{ .Values.opticalRipper.image.repository }}:{{ .Values.opticalRippe
 {{- $tag := .tag | default .root.Chart.AppVersion -}}
 {{- printf "%s/%s/%s:%s" .root.Values.image.registry .root.Values.image.repository .name $tag -}}
 {{- end -}}
+
+{{/*
+Name of the PVC that workloads mount for their shared capture data.
+When `storage.backend == existing`, returns the operator-supplied
+`storage.existing.claimName`. Otherwise returns the chart-managed
+`<release>-data` name (which the chart creates via data-pvc.yaml).
+*/}}
+{{- define "recognizer.dataClaimName" -}}
+{{- if eq .Values.storage.backend "existing" -}}
+{{- required "storage.existing.claimName is required when storage.backend=existing" .Values.storage.existing.claimName -}}
+{{- else -}}
+{{- printf "%s-data" (include "recognizer.fullname" .) -}}
+{{- end -}}
+{{- end -}}
