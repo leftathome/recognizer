@@ -97,10 +97,18 @@ image:
 
 createNamespace: false             # namespace created by the Flux apps Kustomization
 
-nfs:
+storage:
   enabled: true
-  server: <NAS hostname>
-  path: /mnt/tank/recognizer
+  backend: longhorn      # one of: longhorn (default), nfs, existing
+  size: 50Gi
+  accessModes: [ReadWriteMany]
+  longhorn:
+    storageClassName: longhorn
+  nfs:
+    server: ""           # required when backend=nfs
+    path: /mnt/tank/recognizer
+  existing:
+    claimName: ""        # required when backend=existing
 
 networkPolicies:
   enabled: true
@@ -278,9 +286,12 @@ spec:
       repository: steve/recognizer
       pullSecrets:
         - name: recognizer-registry
-    nfs:
-      server: <actual-NAS>
-      path: /mnt/tank/recognizer
+    # Default backend is Longhorn (dynamic RWX provisioning); override only
+    # when an NFS export is available or a pre-existing PVC should be used.
+    # storage:
+    #   backend: nfs
+    #   nfs:
+    #     server: nas.example
     # Workload enables default to on; disable here per-cluster if the hardware
     # is absent.
 ```
