@@ -53,8 +53,9 @@ images/archive-importer/
       google-takeout-mail-only/Takeout/Mail/...
       google-takeout-with-unknown/Takeout/...
       not-an-archive/random.txt
-    takeout-zip/
-      takeout-fixture.zip                           # zip of google-takeout-minimal
+    # NB: no committed zip artifacts. Integration tests build fixture zips
+    # at test time via `buildFixtureZip(t, srcDir)` (Task C3) for byte-
+    # deterministic output.
   scripts/
     run-job.sh                                      # operator helper
 
@@ -156,7 +157,7 @@ Expected: no errors. `check_schema` returns `None` on success. (Don't try `kubec
 
 - [ ] **Step 5: Smoke-test against a v1.0 event AND a v1.1 archive event**
 
-Write a one-shot script `/tmp/schema-probe.py`. The v1.0 sample uses real v1.0 enum values (`source=document-scanner`, `event_type=scan-session-complete`, `media_type=scan/adf-session`):
+Write a one-shot script `/tmp/schema-probe.py`. The v1.0 sample uses real v1.0 enum values (`source=document-scanner`, `event_type=scan-session-complete`, `media_type=scan/adf-session`) and ONLY the v1.0 required fields — no `event_id` (which v1.0 doesn't define and would reject under `additionalProperties: false`):
 
 ```python
 import json, jsonschema
@@ -165,11 +166,11 @@ v10 = {
     "schema_version": "1.0",
     "source": "document-scanner",
     "event_type": "scan-session-complete",
-    "event_id": "evt_EXAMPLE_001",
     "timestamp": "2026-05-19T11:00:00Z",
     "media_type": "scan/adf-session",
     "output_path": "/data/scans/x.tiff",
-    "metadata": {}
+    "metadata": {},
+    "node_name": "johnny"
 }
 v11 = {
     "schema_version": "1.1",
@@ -179,7 +180,8 @@ v11 = {
     "timestamp": "2026-05-19T11:30:08Z",
     "media_type": "archive/google-takeout/mail",
     "output_path": "/data/unpacked/00000000-takeout-EXAMPLE/Takeout/Mail",
-    "metadata": {"archive_format": "zip", "byte_size": 12345}
+    "metadata": {"archive_format": "zip", "byte_size": 12345},
+    "node_name": "johnny"
 }
 jsonschema.validate(v10, schema)
 jsonschema.validate(v11, schema)
@@ -1353,7 +1355,22 @@ func TestWrite_ProducesValidJSON(t *testing.T) {
 // schemas/archive-layout-manifest.v1.schema.json by shelling out to
 // `python3 -m jsonschema`. Catches drift if either the writer or the
 // schema changes without the other.
+//
+// Requires python3 + the `jsonschema` pip package on the host. The
+// golang:1.26.3-bookworm image used by `test:go` has python3 in stdlib
+// but NOT the jsonschema package, so CI installs it via the `before_script`
+// hook in .gitlab-ci.yml (Task E1c). Locally, install via
+// `pip install jsonschema` or skip with `go test -short`.
 func TestWrite_ProducesSchemaValidJSON(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping schema-validation test in -short mode")
+	}
+	// Soft-skip if jsonschema isn't importable so a fresh checkout
+	// without the pip dep doesn't fail the whole suite — CI installs it
+	// explicitly and won't take this path.
+	if err := exec.Command("python3", "-c", "import jsonschema").Run(); err != nil {
+		t.Skip("python3 jsonschema package not installed; run `pip install jsonschema` or use the CI image")
+	}
 	m := minimal()
 	p := filepath.Join(t.TempDir(), ManifestFilename)
 	if err := Write(p, m); err != nil {
@@ -2266,19 +2283,28 @@ func run(cfg *Config) error {
 
 	startTime := time.Now().UTC()
 
-	// 4. Unpack + move source (skipped if priorManifest exists)
+	// 4. Unpack + move source (skipped if priorManifest exists).
+	//    sourcePath is the post-move location of the original archive.
+	//    On a fresh run we derive it from cfg.ArchivePath's basename; on
+	//    a state-2 re-run we read it back from the prior manifest, which
+	//    is the only authoritative record of where the archive landed.
+	var sourcePath string
 	if priorManifest == nil {
 		if err := unpacker.UnpackZip(cfg.ArchivePath, unpackedDir); err != nil {
 			return fmt.Errorf("unpack: %w", err)
 		}
-		newPath := filepath.Join(unpackedDir, filepath.Base(cfg.ArchivePath))
-		if err := os.Rename(cfg.ArchivePath, newPath); err != nil {
+		sourcePath = filepath.Join(unpackedDir, filepath.Base(cfg.ArchivePath))
+		if err := os.Rename(cfg.ArchivePath, sourcePath); err != nil {
 			return fmt.Errorf("move source: %w", err)
 		}
+	} else {
+		// priorManifest.Source.MovedTo is recorded relative to ARCHIVE_DATA_ROOT
+		// (e.g. "unpacked/<id>/takeout-EXAMPLE.zip") — see Write() in
+		// internal/manifest/manifest.go.
+		sourcePath = filepath.Join(cfg.DataRoot, priorManifest.Source.MovedTo)
 	}
 
 	// 5. Compute source hash + size (for the manifest)
-	sourcePath := filepath.Join(unpackedDir, filepath.Base(cfg.ArchivePath))
 	hash, size, mtime, err := hashSize(sourcePath)
 	if err != nil {
 		return fmt.Errorf("hash source: %w", err)
@@ -2575,6 +2601,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/leftathome/recognizer/images/archive-importer/internal/ident"
+	"github.com/leftathome/recognizer/images/archive-importer/internal/lock"
 )
 
 // runIngest invokes the binary as the integration tests would.
@@ -2653,8 +2682,8 @@ func TestIngest_FullFixture(t *testing.T) {
 	}
 	unpacked := matches[0]
 
-	// Source archive was moved
-	if _, err := os.Stat(filepath.Join(unpacked, "takeout-fixture.zip")); err != nil {
+	// Source archive was moved (buildFixtureZip names it takeout-EXAMPLE.zip)
+	if _, err := os.Stat(filepath.Join(unpacked, "takeout-EXAMPLE.zip")); err != nil {
 		t.Errorf("source archive not moved: %v", err)
 	}
 	// Tree was extracted
@@ -2705,8 +2734,8 @@ func TestIngest_Idempotent_ReusesEventIDs(t *testing.T) {
 	dataRoot := t.TempDir()
 	rawDir := filepath.Join(dataRoot, "raw")
 	os.MkdirAll(rawDir, 0755)
-	src, _ := filepath.Abs("../../testdata/takeout-zip/takeout-fixture.zip")
-	target := filepath.Join(rawDir, "takeout-fixture.zip")
+	src := buildFixtureZip(t, "../../testdata/fixtures/google-takeout-minimal")
+	target := filepath.Join(rawDir, "takeout-EXAMPLE.zip")
 	copyFile(t, src, target)
 
 	// run 1
@@ -2714,9 +2743,14 @@ func TestIngest_Idempotent_ReusesEventIDs(t *testing.T) {
 	runIngest(t, map[string]string{"ARCHIVE_DATA_ROOT": dataRoot, "NOTIFICATION_RELAY_URL": srv1.URL}, "ingest", target)
 	srv1.Close()
 
-	// run 2
+	// run 2: the target archive has been moved into unpacked/<id>/ by run 1.
+	// Re-invoke against the moved location to exercise the state-2 re-run path.
+	movedTarget, _ := filepath.Glob(filepath.Join(dataRoot, "unpacked", "*-takeout-EXAMPLE", "takeout-EXAMPLE.zip"))
+	if len(movedTarget) != 1 {
+		t.Fatalf("expected one moved archive after run 1, got %v", movedTarget)
+	}
 	srv2 := mkServer(&run2)
-	runIngest(t, map[string]string{"ARCHIVE_DATA_ROOT": dataRoot, "NOTIFICATION_RELAY_URL": srv2.URL}, "ingest", target)
+	runIngest(t, map[string]string{"ARCHIVE_DATA_ROOT": dataRoot, "NOTIFICATION_RELAY_URL": srv2.URL}, "ingest", movedTarget[0])
 	srv2.Close()
 
 	if len(run1) != len(run2) {
@@ -2764,8 +2798,8 @@ func TestIngest_RelayDown_Exit3(t *testing.T) {
 	dataRoot := t.TempDir()
 	rawDir := filepath.Join(dataRoot, "raw")
 	os.MkdirAll(rawDir, 0755)
-	src, _ := filepath.Abs("../../testdata/takeout-zip/takeout-fixture.zip")
-	target := filepath.Join(rawDir, "takeout-fixture.zip")
+	src := buildFixtureZip(t, "../../testdata/fixtures/google-takeout-minimal")
+	target := filepath.Join(rawDir, "takeout-EXAMPLE.zip")
 	copyFile(t, src, target)
 	_, _, code := runIngest(t,
 		map[string]string{"ARCHIVE_DATA_ROOT": dataRoot, "NOTIFICATION_RELAY_URL": srv.URL},
@@ -2773,6 +2807,106 @@ func TestIngest_RelayDown_Exit3(t *testing.T) {
 	)
 	if code != 3 {
 		t.Errorf("got exit %d, want 3", code)
+	}
+}
+
+// Exit-code coverage for branches that exitCodeFor classifies via
+// string match: matcher errors (2), manifest writes (4), partial-state /
+// lock contention (5). These guarantee exitCodeFor doesn't silently rot
+// when error wording drifts.
+
+func TestIngest_NoMatcher_Exit2(t *testing.T) {
+	// Use the not-an-archive fixture — no provider matches; importer
+	// surfaces a wrapped "matcher: no provider matched" sentinel.
+	dataRoot := t.TempDir()
+	rawDir := filepath.Join(dataRoot, "raw")
+	os.MkdirAll(rawDir, 0755)
+	src := buildFixtureZip(t, "../../testdata/fixtures/not-an-archive")
+	target := filepath.Join(rawDir, "no-match-EXAMPLE.zip")
+	copyFile(t, src, target)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	_, _, code := runIngest(t,
+		map[string]string{"ARCHIVE_DATA_ROOT": dataRoot, "NOTIFICATION_RELAY_URL": srv.URL},
+		"ingest", target,
+	)
+	if code != 2 {
+		t.Errorf("got exit %d, want 2", code)
+	}
+}
+
+func TestIngest_ManifestWriteFails_Exit4(t *testing.T) {
+	// Pre-create archive-layout-manifest.v1.json as a *directory* under
+	// the expected unpacked path so os.WriteFile fails with EISDIR. The
+	// importer surfaces a wrapped "manifest write" sentinel.
+	dataRoot := t.TempDir()
+	rawDir := filepath.Join(dataRoot, "raw")
+	os.MkdirAll(rawDir, 0755)
+	src := buildFixtureZip(t, "../../testdata/fixtures/google-takeout-minimal")
+	target := filepath.Join(rawDir, "takeout-EXAMPLE.zip")
+	copyFile(t, src, target)
+
+	// Compute the unpacked dir ID the importer will produce and plant
+	// a directory at the manifest path. (Use the same ident.Derive that
+	// the importer uses so the path lines up.)
+	id, err := ident.Derive(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unpackedDir := filepath.Join(dataRoot, "unpacked", id)
+	if err := os.MkdirAll(filepath.Join(unpackedDir, "archive-layout-manifest.v1.json"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	_, _, code := runIngest(t,
+		map[string]string{"ARCHIVE_DATA_ROOT": dataRoot, "NOTIFICATION_RELAY_URL": srv.URL},
+		"ingest", target,
+	)
+	if code != 4 {
+		t.Errorf("got exit %d, want 4", code)
+	}
+}
+
+func TestIngest_LockContention_Exit5(t *testing.T) {
+	// Pre-acquire the flock at the unpacked-dir path so the importer's
+	// own Acquire() fails. Importer surfaces a wrapped "another import
+	// is in progress" sentinel.
+	dataRoot := t.TempDir()
+	rawDir := filepath.Join(dataRoot, "raw")
+	os.MkdirAll(rawDir, 0755)
+	src := buildFixtureZip(t, "../../testdata/fixtures/google-takeout-minimal")
+	target := filepath.Join(rawDir, "takeout-EXAMPLE.zip")
+	copyFile(t, src, target)
+
+	id, err := ident.Derive(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unpackedDir := filepath.Join(dataRoot, "unpacked", id)
+	os.MkdirAll(unpackedDir, 0755)
+	lockPath := filepath.Join(unpackedDir, ".import.lock")
+	lk, err := lock.Acquire(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lk.Release()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	_, _, code := runIngest(t,
+		map[string]string{"ARCHIVE_DATA_ROOT": dataRoot, "NOTIFICATION_RELAY_URL": srv.URL},
+		"ingest", target,
+	)
+	if code != 5 {
+		t.Errorf("got exit %d, want 5", code)
 	}
 }
 
@@ -3185,6 +3319,13 @@ test:go:archive-importer:
   extends: test:go
   variables:
     GO_MODULE_DIR: images/archive-importer
+  before_script:
+    # Manifest writer's TestWrite_ProducesSchemaValidJSON shells out to
+    # `python3 -m jsonschema`. The golang:1.26.3-bookworm image has
+    # python3 but not the pip package; install it here. (The test soft-
+    # skips if the import fails, but we want it actually running in CI.)
+    - apt-get update && apt-get install -y --no-install-recommends python3-pip
+    - pip install --break-system-packages jsonschema
 
 vuln:go:archive-importer:
   extends: vuln:go
@@ -3198,7 +3339,7 @@ vuln:go:archive-importer:
 yq '."test:go:archive-importer", ."vuln:go:archive-importer"' .gitlab-ci.yml
 ```
 
-Expected: prints two non-null job specs.
+Expected: prints two non-null job specs, with `test:go:archive-importer.before_script` installing `jsonschema`.
 
 - [ ] **Step 3: Commit**
 
@@ -3370,14 +3511,25 @@ Expected: ~14 `archive-subtree-recognized` + 1 `archive-import-complete` entries
 
 - [ ] **Step 5: Pull the manifest off the PVC**
 
-The archive-importer container is distroless and has no `tar` binary, so `kubectl cp` won't work. Spin up a one-shot busybox pod that mounts the same PVC and dump the manifest to stdout:
+The archive-importer container is distroless and has no `tar` binary, so `kubectl cp` won't work. Spin up a one-shot busybox pod that mounts the same PVC, then pull its logs (NOT a `--rm -it` attach — interactive attach mixes pod-lifecycle stderr into stdout and corrupts the JSON):
 
 ```bash
+# Resolve the actual data PVC name from the chart's release.
+PVC=$(kubectl -n recognizer get pvc -l app.kubernetes.io/name=recognizer -o jsonpath='{.items[0].metadata.name}')
 UNPACKED_ID=$(kubectl -n recognizer logs deployment/recognizer-notification-relay | grep archive-import-complete | tail -1 | jq -r '.output_path' | xargs basename)
-kubectl -n recognizer run manifest-cat-$RANDOM --rm -it \
-  --image=busybox:stable --restart=Never \
-  --overrides='{"spec":{"containers":[{"name":"c","image":"busybox:stable","command":["cat","/data/unpacked/'"$UNPACKED_ID"'/archive-layout-manifest.v1.json"],"volumeMounts":[{"name":"d","mountPath":"/data"}]}],"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"recognizer-data"}}]}}' \
-  > /tmp/manifest-from-cluster.json
+POD=manifest-cat-$RANDOM
+
+kubectl -n recognizer run "$POD" \
+  --image=busybox:stable --restart=Never --attach=false \
+  --overrides='{"spec":{"containers":[{"name":"c","image":"busybox:stable","command":["cat","/data/unpacked/'"$UNPACKED_ID"'/archive-layout-manifest.v1.json"],"volumeMounts":[{"name":"d","mountPath":"/data","readOnly":true}]}],"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"'"$PVC"'"}}]}}'
+
+# Wait for the cat to finish; "Succeeded" or "Failed" both end the wait.
+kubectl -n recognizer wait --for=jsonpath='{.status.phase}'=Succeeded --timeout=60s pod/"$POD"
+kubectl -n recognizer logs "$POD" > /tmp/manifest-from-cluster.json
+kubectl -n recognizer delete pod "$POD"
+
+# Sanity-check we got JSON, not an error message:
+jq . /tmp/manifest-from-cluster.json > /dev/null || { echo "manifest fetch failed"; exit 1; }
 ```
 
 If PSS=baseline blocks the inline override, ssh into a node and read the manifest off the NFS / Longhorn mount path directly (spec 02's gitops-jakd ops notes have the path).
