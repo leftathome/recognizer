@@ -116,7 +116,10 @@ opticalRipper:
   # NOT via the recognizer.image helper.
   image:
     repository: automaticrippingmachine/automatic-ripping-machine
-    tag: "2.6.0"
+    # 2.6.0 (the original default) was never published on Docker Hub -- the
+    # 2.6.x line jumps straight to 2.6.42. 2.21.0 is a recent stable release
+    # with multi-arch manifests (amd64/arm64/arm).
+    tag: "2.21.0"
   resources:
     requests:
       cpu: 200m
