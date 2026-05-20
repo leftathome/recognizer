@@ -1,0 +1,15 @@
+{{- if .Values.archiveImporter.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "recognizer.fullname" . }}-archive-importer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: archive-importer
+data:
+  ARCHIVE_DATA_ROOT: {{ .Values.archiveImporter.config.dataRoot | quote }}
+  NOTIFICATION_RELAY_URL: {{ .Values.archiveImporter.config.relayUrl | default (include "recognizer.relayUrl" .) | quote }}
+  INCLUDE_UNRECOGNIZED: {{ .Values.archiveImporter.config.includeUnrecognized | quote }}
+  LOG_LEVEL: {{ .Values.archiveImporter.config.logLevel | quote }}
+{{- end }}

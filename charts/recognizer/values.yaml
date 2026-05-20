@@ -139,3 +139,26 @@ opticalRipper:
   # recognizer.io/device-optical-drive label value).
   nodeSelector:
     recognizer.io/device-optical-drive: pioneer-bdr-xs07uhd
+
+# ============================================================================
+# archive-importer (spec 03): one-shot/CronJob that ingests Google Takeout
+# (and future) archives. Disabled by default for Phase D rollout; enable
+# per release once the image is built and Vault paths are populated.
+# ============================================================================
+archiveImporter:
+  enabled: true
+  image:
+    name: archive-importer
+    tag: ""
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  config:
+    dataRoot: /data/incoming/archives
+    relayUrl: ""              # empty -> recognizer.relayUrl helper
+    includeUnrecognized: false
+    logLevel: info

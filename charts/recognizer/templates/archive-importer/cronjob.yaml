@@ -1,0 +1,56 @@
+{{- if .Values.archiveImporter.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "recognizer.fullname" . }}-archive-importer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: archive-importer
+  annotations:
+    recognizer.orac.local/usage: |
+      Suspended template. Promote to a Job per spec 03 § 8.1:
+        kubectl -n {{ .Release.Namespace }} get cronjob {{ include "recognizer.fullname" . }}-archive-importer -o yaml \
+        | yq '.spec.jobTemplate as $jt | $jt
+              | .apiVersion = "batch/v1" | .kind = "Job"
+              | .metadata.name = "archive-import-<name>-<id>" | .metadata.namespace = "{{ .Release.Namespace }}"
+              | .spec.template.spec.containers[0].args = ["ingest", "/data/incoming/archives/raw/<filename>"]' \
+        | kubectl apply -f -
+spec:
+  suspend: true
+  schedule: "0 0 1 1 0"          # canonical chart sentinel for an inert
+                                 # CronJob; never fires while suspended
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "recognizer.labels" . | nindent 12 }}
+            app.kubernetes.io/component: archive-importer
+        spec:
+          serviceAccountName: {{ include "recognizer.fullname" . }}-archive-importer
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/arch: amd64
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: archive-importer
+              image: {{ include "recognizer.image" (dict "root" $ "name" .Values.archiveImporter.image.name "tag" .Values.archiveImporter.image.tag) }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              envFrom:
+                - configMapRef:
+                    name: {{ include "recognizer.fullname" . }}-archive-importer
+              args: ["ingest", "/data/incoming/archives/raw/REPLACE-ME.zip"]
+              volumeMounts:
+                - name: data
+                  mountPath: /data/incoming/archives
+              resources:
+                {{- toYaml .Values.archiveImporter.resources | nindent 16 }}
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: {{ include "recognizer.dataClaimName" . }}
+{{- end }}
