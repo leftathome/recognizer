@@ -90,9 +90,11 @@ The `<id>` is content-addressed (SHA256-prefixed). Same archive byte-for-byte pr
 |---|---|---|
 | **Absent** | `unpacked/<id>/` does not exist | Full run (all 9 steps). |
 | **Present, manifest valid** | `archive-layout-manifest.v1.json` exists and parses against the schema | Skip steps 2-4 (no re-extract, no re-move). Re-run steps 5-9: re-emit events with the **same `event_id`s** loaded from the prior manifest's `events_emitted` (downstream consumers see stable identity). Manifest overwritten with fresh timestamps but identical event IDs. |
-| **Present, manifest absent or invalid** | `unpacked/<id>/` exists but `archive-layout-manifest.v1.json` is missing or fails schema validation | Treat as failed prior run. Exit code 5 with a clear error ("partial state at unpacked/<id>/; re-run with --force to overwrite, or remove the directory manually"). |
+| **Present, manifest absent or invalid** | `unpacked/<id>/` exists but `archive-layout-manifest.v1.json` is missing or fails schema validation | Treat as failed prior run. Exit code 5 with a clear error ("partial state at unpacked/<id>/; re-run with --force to overwrite, or remove the directory manually"). Use `--force` to re-extract anyway. |
 
 `--force` overrides the third state: re-extract from scratch, regenerate manifest, mint new event IDs (the prior manifest is unreadable so old IDs can't be reused). `--force` is also valid in state 2 but unnecessary -- the binary skips unpack by default there.
+
+**Concurrent-run protection.** Two `kubectl create job` invocations (or one in-cluster Job + one workstation run) against the same archive could race past the "absent" check and both unpack into the same directory. The binary acquires an exclusive `flock(2)` on `unpacked/<id>/.lock` immediately after step 2 (directory creation) and holds it until step 9. A second process that finds the lock taken exits 5 with "another import is in progress for this archive id" without disturbing the in-flight unpack. The lockfile is removed on clean exit; a stale lock left over from a SIGKILL'd predecessor manifests as state-3 (manifest missing) on the next run and is handled by the existing error path.
 
 This is a deliberate split: "the data is already on disk, but please re-tell the relay about it" is a common operator need (relay was down, or a new subscriber wants old events). `--force` is for the rare "I think the unpack itself was wrong" case.
 
@@ -306,7 +308,26 @@ Most consumers care only about `archive-subtree-recognized` with a specific `med
 
 ### 7.4 Subscribing by media type
 
-Subscribers register a prefix match. Example: glovebox's mbox importer subscribes to `archive/google-takeout/mail` (specific) and might also subscribe to `archive/*/mail` (any provider's mail) when handler logic generalizes. New providers (Meta export, Slack export) ship new media types under their own `archive/<provider>/...` prefix; subscribers that match by service-level prefix (`archive/*/mail`) pick them up automatically.
+**Current relay behavior (V1):** the notification-relay fans out **every event** to **every configured destination** -- there is no server-side filtering by `media_type` or `event_type`. Subscribers receive the full event stream and filter **client-side** by inspecting `media_type` on each incoming event.
+
+A practical consumer (e.g., glovebox's mbox importer) implements a prefix-match in its own handler:
+
+```python
+def on_event(event):
+    if not event["media_type"].startswith("archive/"):
+        return                                   # not an archive event
+    if event["media_type"] != "archive/google-takeout/mail":
+        return                                   # not my event
+    if event["event_type"] != "archive-subtree-recognized":
+        return                                   # only the subtree-recognized step
+    # ... handle the mail subtree at event["output_path"]
+```
+
+Consumers that want broader coverage (e.g., "any provider's mail") use a less-specific prefix in the same client-side check: `event["media_type"].endswith("/mail")` or `re.match(r"archive/[^/]+/mail$", event["media_type"])`.
+
+**Future evolution (deferred):** spec 01 § 6 lists "NATS subjects per `plan.md`, Section 3.3.2" as a possible replacement for the webhook relay. NATS subjects would let subscribers register server-side prefix subscriptions, removing the all-events-to-all-destinations fan-out cost. The event envelope and `media_type` taxonomy stay identical when that swap happens; consumer code changes from "filter on receive" to "subscribe to a subject". Not in V1.
+
+The wildcard expressions in earlier drafts of this spec (`archive/*/mail`) describe the *logical* intent and would be subjects under a future NATS-based bus; today they are client-side regex predicates.
 
 ### 7.5 Worked example
 
@@ -357,7 +378,7 @@ kubectl -n recognizer get cronjob recognizer-archive-importer -o yaml \
     | $jt
     | .apiVersion = "batch/v1"
     | .kind = "Job"
-    | .metadata.name = "archive-import-'${ARCHIVE%.zip}'-'$(date +%s)'"
+    | .metadata.name = "archive-import-'${ARCHIVE%.zip}'-'$(date +%s)$(openssl rand -hex 2)'"
     | .metadata.namespace = "recognizer"
     | .spec.template.spec.containers[0].args = ["ingest", "/data/incoming/archives/raw/'$ARCHIVE'"]
   ' \
@@ -382,9 +403,14 @@ archiveImporter:
       memory: 256Mi
     limits:
       cpu: "1"
-      memory: 2Gi            # justified: a 500k-entry zip's central directory
-                             # is ~50 MiB resident; rest is buffered relay-retry
-                             # queue + per-entry decompression headroom.
+      memory: 2Gi            # conservative ceiling. Steady-state demand is
+                             # in the low hundreds of MiB (zip central
+                             # directory ~50 MiB for a 500k-entry archive,
+                             # decompression buffers <1 MiB per stream,
+                             # relay-retry queue <100 MiB). The 2 GiB ceiling
+                             # is headroom for fragmented or highly compressed
+                             # archives; tune downward after a real-Takeout
+                             # baseline run.
   config:
     dataRoot: /data/incoming/archives
     relayUrl: ""             # empty = use computed in-cluster default
@@ -475,7 +501,7 @@ Spec 03 (this document) is `v1.0`. A future v1.1 of this spec adds Meta export a
 1. Schema files committed: `schemas/notification-event.v1.1.schema.json`, `schemas/archive-layout-manifest.v1.schema.json`.
 2. This spec committed as `docs/specs/03-archive-importer-google-takeout.md` v1.0.
 3. Binary builds + tests green in CI; chart bumped to 0.2.0; `archive-importer:v0.1.0` published to the registry.
-4. Idempotency verified: same fixture archive yields a manifest that is byte-identical across two consecutive runs after applying `jq 'del(.timestamps, .events_emitted[].timestamp)'`. Event IDs in `events_emitted` are identical across runs.
+4. Idempotency verified: same fixture archive yields a manifest that is byte-identical across two consecutive runs after applying `jq 'del(.timestamps, .events_emitted[].timestamp, .subtrees_unrecognized[].first_seen)'`. Event IDs in `events_emitted` are identical across runs.
 5. A real user-supplied Google Takeout lands `archive-subtree-recognized` events in notification-relay end-to-end, with the sidecar manifest accurately enumerating the recognized + unrecognized subtrees.
 6. § 7.5's example event in this spec is regenerated from the manual acceptance run (real values, not fabricated).
 
