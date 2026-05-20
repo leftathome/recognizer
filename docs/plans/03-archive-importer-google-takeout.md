@@ -143,34 +143,31 @@ Start from the v1.0 file and apply the additive changes from spec 03 § 6.1:
   - `origin`: `{"type": "string"}` (nullable)
   - `parent_event_id`: `{"type": "string"}` (nullable)
 - `schema_version` field accepts `"1.0"` OR `"1.1"`.
-- Keep `additionalProperties: false` at the same level v1.0 had it.
+- Keep `additionalProperties: false` at the top level (matching v1.0). The `metadata` object's `additionalProperties` should stay at whatever v1.0 had — **but** if v1.0 has `additionalProperties: false` inside `metadata`, you MUST add the five new properties above to `metadata.properties` (which Step 3 already does) or the schema will reject v1.1 events containing those keys. Step 5's probe script intentionally exercises this path.
 
 - [ ] **Step 4: Validate the schema is itself well-formed JSON Schema**
 
 ```bash
 jq empty schemas/notification-event.v1.1.schema.json && echo "json ok"
-# Validate against draft 2020-12 metaschema (or whichever v1.0 uses)
-kubeconform -strict -schema-location schemas/notification-event.v1.1.schema.json /dev/null 2>&1 | head
-# kubeconform isn't ideal for this; use ajv if available, or just parse:
 python3 -c "import json, jsonschema; jsonschema.Draft202012Validator.check_schema(json.load(open('schemas/notification-event.v1.1.schema.json')))"
 ```
 
-Expected: no errors. `check_schema` returns `None` on success.
+Expected: no errors. `check_schema` returns `None` on success. (Don't try `kubeconform` here — it validates Kubernetes manifests, not arbitrary JSON Schemas.)
 
 - [ ] **Step 5: Smoke-test against a v1.0 event AND a v1.1 archive event**
 
-Write a one-shot script `/tmp/schema-probe.py`:
+Write a one-shot script `/tmp/schema-probe.py`. The v1.0 sample uses real v1.0 enum values (`source=document-scanner`, `event_type=scan-session-complete`, `media_type=scan/adf-session`):
 
 ```python
 import json, jsonschema
 schema = json.load(open("schemas/notification-event.v1.1.schema.json"))
 v10 = {
     "schema_version": "1.0",
-    "source": "scanner-session-manager",
-    "event_type": "scan-complete",
+    "source": "document-scanner",
+    "event_type": "scan-session-complete",
     "event_id": "evt_EXAMPLE_001",
     "timestamp": "2026-05-19T11:00:00Z",
-    "media_type": "scan/document",      # adjust to a real v1.0 enum value
+    "media_type": "scan/adf-session",
     "output_path": "/data/scans/x.tiff",
     "metadata": {}
 }
@@ -311,11 +308,48 @@ python3 -c "import json, jsonschema; jsonschema.Draft202012Validator.check_schem
 
 Expected: no output (success).
 
-- [ ] **Step 4: Smoke-test against the worked-example manifest from spec 03 § 6.2**
+- [ ] **Step 4: Smoke-test against a representative manifest**
 
-Write a fixture `/tmp/manifest-probe.json` mirroring spec 03 § 6.2's example (use the `00000000`/`EXAMPLE` sentinels). Then:
+Write `/tmp/manifest-probe.json` verbatim:
 
 ```bash
+cat > /tmp/manifest-probe.json <<'JSON'
+{
+  "schema_version": "1.0",
+  "archive_id": "00000000-takeout-EXAMPLE",
+  "source": {
+    "original_filename": "takeout-EXAMPLE.zip",
+    "moved_to": "unpacked/00000000-takeout-EXAMPLE/takeout-EXAMPLE.zip",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "size_bytes": 12345,
+    "mtime": "2026-05-19T11:00:00Z",
+    "archive_format": "zip"
+  },
+  "provider": "google-takeout",
+  "matcher_version": "1.0",
+  "timestamps": { "start": "2026-05-19T11:30:00Z", "end": "2026-05-19T11:34:12Z" },
+  "subtrees_recognized": [
+    {
+      "media_type": "archive/google-takeout/mail",
+      "output_path": "unpacked/00000000-takeout-EXAMPLE/Takeout/Mail",
+      "item_count": null,
+      "byte_size": 100,
+      "event_id": "evt_EXAMPLE_001"
+    }
+  ],
+  "subtrees_unrecognized": [
+    {
+      "path": "Takeout/SomeNewService",
+      "first_seen": "2026-05-19T11:30:14Z",
+      "byte_size": 88,
+      "emitted_event": false
+    }
+  ],
+  "events_emitted": [
+    { "event_id": "evt_EXAMPLE_001", "event_type": "archive-subtree-recognized", "media_type": "archive/google-takeout/mail", "timestamp": "2026-05-19T11:30:08Z" }
+  ]
+}
+JSON
 python3 -c "
 import json, jsonschema
 schema = json.load(open('schemas/archive-layout-manifest.v1.schema.json'))
@@ -398,7 +432,9 @@ Expected: prints `usage: archive-importer ingest <archive-path>`; `exit=1`.
 # syntax=docker/dockerfile:1
 FROM golang:1.26.3-bookworm AS build
 WORKDIR /src
-COPY go.mod go.sum* ./
+COPY go.mod ./
+# go.sum is absent in the initial scaffold; copied later as a separate
+# COPY once dependencies land (Task B7 adds golang.org/x/sys).
 RUN go mod download || true
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/archive-importer ./cmd/archive-importer
@@ -409,7 +445,7 @@ USER nonroot
 ENTRYPOINT ["/usr/local/bin/archive-importer"]
 ```
 
-(`go.sum*` allows the COPY to succeed when go.sum is absent in the initial empty-deps state.)
+After Task B7 commits a `go.sum`, append `COPY go.sum ./` after the `go.mod` line (kaniko handles missing files differently from docker buildx; the explicit two-line copy is the portable form).
 
 - [ ] **Step 5: Green — local Docker build succeeds**
 
@@ -918,11 +954,15 @@ This is the biggest Phase B task — 15 subtree matchers. Decompose internally a
 
 - [ ] **Step 1: Write the fixture trees**
 
-Create one minimal Takeout fixture exercising every subtree:
+Create one minimal Takeout fixture exercising every subtree. Bash brace expansion does NOT support unquoted spaces, so the spaced directories are created with separate `mkdir -p` calls:
 
 ```bash
 cd images/archive-importer
-mkdir -p testdata/fixtures/google-takeout-minimal/Takeout/{Mail,Calendar,Chat,Keep,NotebookLM,Voice,"My Activity","Google Photos","Location History","YouTube and YouTube Music",Fit,Drive,Tasks,Contacts}
+mkdir -p testdata/fixtures/google-takeout-minimal/Takeout/{Mail,Calendar,Chat,Keep,NotebookLM,Voice,Fit,Drive,Tasks,Contacts}
+mkdir -p "testdata/fixtures/google-takeout-minimal/Takeout/My Activity"
+mkdir -p "testdata/fixtures/google-takeout-minimal/Takeout/Google Photos"
+mkdir -p "testdata/fixtures/google-takeout-minimal/Takeout/Location History"
+mkdir -p "testdata/fixtures/google-takeout-minimal/Takeout/YouTube and YouTube Music"
 echo 'From: a@b' > testdata/fixtures/google-takeout-minimal/Takeout/Mail/foo.mbox
 cat > testdata/fixtures/google-takeout-minimal/Takeout/Calendar/foo.ics <<'EOF'
 BEGIN:VCALENDAR
@@ -1119,7 +1159,7 @@ func GoogleTakeoutProvider() Provider {
 			dirMatcher{nameAny: []string{"Location History", "Timeline"}, mt: "archive/google-takeout/timeline", desc: "Google location timeline", fingerprint: anyFileMatching("*.json")},
 			dirMatcher{nameAny: []string{"YouTube and YouTube Music"}, mt: "archive/google-takeout/youtube", desc: "YouTube + Music export", fingerprint: anySubdirOf("videos", "playlists")},
 			dirMatcher{name: "Fit", mt: "archive/google-takeout/fit", desc: "Google Fit", fingerprint: anySubdirOf("Activity")},
-			dirMatcher{name: "Drive", mt: "archive/google-takeout/drive", desc: "Google Drive", fingerprint: anyFileMatching("*")}, // mixed content; presence of any file
+			dirMatcher{name: "Drive", mt: "archive/google-takeout/drive", desc: "Google Drive", fingerprint: anyFileMatching("*.*")}, // mixed content; require at least one file with a dot in the name (excludes empty dirs)
 			dirMatcher{name: "Tasks", mt: "archive/google-takeout/tasks", desc: "Google Tasks", fingerprint: anyFileMatching("*.json")},
 			dirMatcher{name: "Contacts", mt: "archive/google-takeout/contacts", desc: "Google Contacts", fingerprint: anyFileMatching("*.vcf")},
 		},
@@ -1160,14 +1200,20 @@ func (d dirMatcher) nameMatches(name string) bool {
 	return false
 }
 
-// anyFileMatching returns a fingerprint that's true if any file in dirPath
-// (any depth) matches glob.
+// anyFileMatching returns a fingerprint that's true if any non-hidden file
+// (NOT the directory itself, NOT hidden files) in dirPath matches glob.
 func anyFileMatching(glob string) func(string) (bool, error) {
 	return func(dirPath string) (bool, error) {
 		found := false
-		err := filepath.WalkDir(dirPath, func(p string, _ os.DirEntry, err error) error {
+		err := filepath.WalkDir(dirPath, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
+			}
+			if p == dirPath {
+				return nil // skip the root itself
+			}
+			if d.IsDir() {
+				return nil
 			}
 			ok, _ := filepath.Match(glob, filepath.Base(p))
 			if ok && !strings.HasPrefix(filepath.Base(p), ".") {
@@ -1234,6 +1280,8 @@ git commit -m "feat(archive-importer): Google Takeout provider + 15 subtree matc
 - Create: `images/archive-importer/internal/manifest/manifest.go`
 - Create: `images/archive-importer/internal/manifest/manifest_test.go`
 
+A2's JSON Schema isn't strictly required for B5's tests to be useful, but the package should validate against it so a future schema change can't drift silently. Tests therefore shell out to the same `python3 -m jsonschema` validator used in A2.
+
 - [ ] **Step 1: Failing tests**
 
 `manifest_test.go`:
@@ -1244,6 +1292,7 @@ package manifest
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -1297,6 +1346,30 @@ func TestWrite_ProducesValidJSON(t *testing.T) {
 	var anything map[string]any
 	if err := json.Unmarshal(b, &anything); err != nil {
 		t.Errorf("invalid JSON: %v", err)
+	}
+}
+
+// TestWrite_ProducesSchemaValidJSON validates the writer output against
+// schemas/archive-layout-manifest.v1.schema.json by shelling out to
+// `python3 -m jsonschema`. Catches drift if either the writer or the
+// schema changes without the other.
+func TestWrite_ProducesSchemaValidJSON(t *testing.T) {
+	m := minimal()
+	p := filepath.Join(t.TempDir(), ManifestFilename)
+	if err := Write(p, m); err != nil {
+		t.Fatal(err)
+	}
+	// Path to the schema is relative to the repo root; the manifest
+	// package sits at images/archive-importer/internal/manifest, so:
+	schema := "../../../../schemas/archive-layout-manifest.v1.schema.json"
+	cmd := exec.Command("python3", "-c", `
+import json, sys, jsonschema
+schema = json.load(open(sys.argv[1]))
+sample = json.load(open(sys.argv[2]))
+jsonschema.validate(sample, schema)
+`, schema, p)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("schema validation failed: %v\n%s", err, out)
 	}
 }
 
@@ -1572,6 +1645,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -1610,6 +1684,8 @@ func (c *Client) Post(event any) error {
 		if err != nil {
 			lastErr = err
 		} else {
+			// Drain and close body to avoid connection leaks on retries.
+			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			if resp.StatusCode < 500 {
 				if resp.StatusCode >= 400 {
@@ -1658,6 +1734,7 @@ package lock
 import (
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1694,33 +1771,39 @@ func TestAcquire_AfterReleaseSucceeds(t *testing.T) {
 	lk2.Release()
 }
 
-func TestAcquire_NoRace(t *testing.T) {
-	// Stress test: 10 goroutines, exactly one should succeed at a time.
+func TestAcquire_MutualExclusion(t *testing.T) {
+	// Stress: many goroutines, atomic counter inside the critical section
+	// must never exceed 1.
 	p := filepath.Join(t.TempDir(), ".lock")
+	var inFlight, maxSeen int32
 	var wg sync.WaitGroup
-	var succ int
-	var mu sync.Mutex
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			lk, err := Acquire(p)
-			if err != nil {
-				return
+			for try := 0; try < 5; try++ {
+				lk, err := Acquire(p)
+				if err != nil {
+					time.Sleep(time.Millisecond)
+					continue
+				}
+				cur := atomic.AddInt32(&inFlight, 1)
+				for {
+					old := atomic.LoadInt32(&maxSeen)
+					if cur <= old || atomic.CompareAndSwapInt32(&maxSeen, old, cur) {
+						break
+					}
+				}
+				time.Sleep(2 * time.Millisecond)
+				atomic.AddInt32(&inFlight, -1)
+				lk.Release()
+				break
 			}
-			mu.Lock()
-			succ++
-			mu.Unlock()
-			time.Sleep(20 * time.Millisecond)
-			lk.Release()
 		}()
 	}
 	wg.Wait()
-	// All 10 will succeed eventually because they all release; the test is
-	// just that no two hold simultaneously, which we check via no panic
-	// and matched acquire/release counts.
-	if succ == 0 {
-		t.Error("nobody acquired the lock")
+	if got := atomic.LoadInt32(&maxSeen); got != 1 {
+		t.Errorf("mutual exclusion broken: maxSeen=%d, want 1", got)
 	}
 }
 ```
@@ -1987,14 +2070,118 @@ git commit -m "feat(archive-importer): CLI flag parsing"
 
 **Files:**
 - Modify: `images/archive-importer/cmd/archive-importer/main.go`
+- Create: `images/archive-importer/cmd/archive-importer/errors.go` (sentinel errors + exit-code mapping)
+- Create: `images/archive-importer/cmd/archive-importer/event.go` (notification-event struct)
 
-- [ ] **Step 1: Failing integration test (placed in C3 — see next task)**
+This task and C3 are tightly coupled — C3 writes the integration tests that drive this implementation. Write the substeps below in order; iterate against C3's tests as they go red→green.
 
-Skip ahead and write `main_test.go` first (Task C3 below), then come back and implement until the test passes. This task and C3 are tightly coupled — you'll iterate between them.
+- [ ] **Step 1: Define sentinel errors + exit-code mapping**
 
-- [ ] **Step 2: Implement the main flow**
+`errors.go`:
 
-`main.go` should orchestrate the steps in spec 03 § 4:
+```go
+package main
+
+import (
+	"archive/zip"
+	"errors"
+	"os"
+	"strings"
+)
+
+// Sentinel-shaped error categorization for the os.Exit code in main().
+// Per spec 03 § 4.3.
+func exitCodeFor(err error) int {
+	if err == nil {
+		return 0
+	}
+	if errors.Is(err, zip.ErrInsecurePath) {
+		return 1
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return 1
+	}
+	if strings.Contains(err.Error(), "unpack") || strings.Contains(err.Error(), "open archive") {
+		return 1
+	}
+	if strings.Contains(err.Error(), "relay POST exhausted retries") {
+		return 3
+	}
+	if strings.Contains(err.Error(), "manifest write") {
+		return 4
+	}
+	if strings.Contains(err.Error(), "partial state") || strings.Contains(err.Error(), "another import is in progress") {
+		return 5
+	}
+	if strings.Contains(err.Error(), "matcher") {
+		return 2
+	}
+	return 1
+}
+```
+
+(String matching is acceptable because the package boundaries are tight and the errors are wrapped with deterministic prefixes from each package — `unpacker.UnpackZip` wraps with "unpack", `relay.Client.Post` wraps with "relay POST exhausted retries", etc. If a future refactor introduces real sentinel types per package, the switch becomes `errors.Is` over those types. The integration tests in C3 will catch regressions either way.)
+
+- [ ] **Step 2: Define the notification-event struct**
+
+`event.go`:
+
+```go
+package main
+
+import "time"
+
+// Event matches the v1.1 schema in schemas/notification-event.v1.1.schema.json.
+type Event struct {
+	SchemaVersion string         `json:"schema_version"`
+	Source        string         `json:"source"`
+	EventType     string         `json:"event_type"`
+	EventID       string         `json:"event_id"`
+	Timestamp     string         `json:"timestamp"`
+	MediaType     string         `json:"media_type"`
+	OutputPath    string         `json:"output_path"`
+	Metadata      map[string]any `json:"metadata"`
+}
+
+func newEvent(eventType, mediaType, outputPath, eventID string) Event {
+	return Event{
+		SchemaVersion: "1.1",
+		Source:        "archive-recognizer",
+		EventType:     eventType,
+		EventID:       eventID,
+		Timestamp:     time.Now().UTC().Format(time.RFC3339),
+		MediaType:     mediaType,
+		OutputPath:    outputPath,
+		Metadata:      map[string]any{},
+	}
+}
+```
+
+- [ ] **Step 3: Implement deterministic event ID derivation**
+
+Event IDs must be deterministic and reusable across re-runs (per spec 03 § 4.2 state-2 behavior). Two sources of truth: the prior manifest if present, OR a hash of `(archive_id, media_type, output_path)`.
+
+Add to `main.go`:
+
+```go
+func deriveEventID(archiveID, mediaType, outputPath string) string {
+	h := sha256.New()
+	io.WriteString(h, archiveID)
+	io.WriteString(h, "|")
+	io.WriteString(h, mediaType)
+	io.WriteString(h, "|")
+	io.WriteString(h, outputPath)
+	return "evt_" + hex.EncodeToString(h.Sum(nil))[:16]
+}
+```
+
+On re-runs, the binary first calls `manifest.Read` on the existing manifest; for each entry in `subtrees_recognized` the `event_id` is reused. New (or unchanged) matches re-derive via `deriveEventID`. Both paths produce the same string for identical input, so even a fresh `--force` run reuses the IDs.
+
+- [ ] **Step 4: Implement run() following spec 03 § 4 steps verbatim**
+
+Walk the children of `subtreeBase` once via `os.ReadDir(subtreeBase)` — **single-level**, not recursive. (Spec § 4 step 6 says "for each child of `Takeout/`".) For each matched child, derive event ID and POST.
+
+`main.go` (replacing the prior placeholder):
 
 ```go
 package main
@@ -2002,9 +2189,9 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -2031,60 +2218,344 @@ func main() {
 	}
 }
 
-// ... see main_test.go in Task C3 for the exact assertions this must satisfy.
-// Implement run() to satisfy them, calling out to ident/unpacker/matcher/
-// manifest/relay/lock in the order documented in spec 03 § 4.
+func run(cfg *Config) error {
+	// 1. Derive archive id
+	id := cfg.IDOverride
+	if id == "" {
+		var err error
+		id, err = ident.Derive(cfg.ArchivePath)
+		if err != nil {
+			return fmt.Errorf("open archive: %w", err)
+		}
+	}
+
+	unpackedDir := filepath.Join(cfg.DataRoot, "unpacked", id)
+	relayClient := relay.NewClient(cfg.RelayURL, 3, time.Second)
+
+	// 2. State detection (spec 03 § 4.2)
+	var priorManifest *manifest.Manifest
+	switch state := detectState(unpackedDir); state {
+	case stateAbsent:
+		if err := os.MkdirAll(unpackedDir, 0755); err != nil {
+			return err
+		}
+	case stateManifestValid:
+		var err error
+		priorManifest, err = manifest.Read(filepath.Join(unpackedDir, manifest.ManifestFilename))
+		if err != nil {
+			return fmt.Errorf("read prior manifest: %w", err)
+		}
+	case stateManifestMissingOrInvalid:
+		if !cfg.Force {
+			return fmt.Errorf("partial state at %s; re-run with --force or remove the directory", unpackedDir)
+		}
+		os.RemoveAll(unpackedDir)
+		if err := os.MkdirAll(unpackedDir, 0755); err != nil {
+			return err
+		}
+	}
+
+	// 3. Acquire flock for concurrent-run safety
+	lockPath := filepath.Join(unpackedDir, ".lock")
+	lk, err := lock.Acquire(lockPath)
+	if err != nil {
+		return fmt.Errorf("another import is in progress for %s: %w", id, err)
+	}
+	defer lk.Release()
+	defer os.Remove(lockPath)
+
+	startTime := time.Now().UTC()
+
+	// 4. Unpack + move source (skipped if priorManifest exists)
+	if priorManifest == nil {
+		if err := unpacker.UnpackZip(cfg.ArchivePath, unpackedDir); err != nil {
+			return fmt.Errorf("unpack: %w", err)
+		}
+		newPath := filepath.Join(unpackedDir, filepath.Base(cfg.ArchivePath))
+		if err := os.Rename(cfg.ArchivePath, newPath); err != nil {
+			return fmt.Errorf("move source: %w", err)
+		}
+	}
+
+	// 5. Compute source hash + size (for the manifest)
+	sourcePath := filepath.Join(unpackedDir, filepath.Base(cfg.ArchivePath))
+	hash, size, mtime, err := hashSize(sourcePath)
+	if err != nil {
+		return fmt.Errorf("hash source: %w", err)
+	}
+
+	// 6. Detect provider + iterate subtree matchers
+	provider := matcher.GoogleTakeoutProvider()
+	detected, subtreeBase, err := provider.Detect(unpackedDir)
+	if err != nil {
+		return fmt.Errorf("matcher: provider detection: %w", err)
+	}
+	if !detected {
+		return fmt.Errorf("matcher: no provider matched in %s", unpackedDir)
+	}
+
+	entries, err := os.ReadDir(subtreeBase)
+	if err != nil {
+		return fmt.Errorf("read subtree base: %w", err)
+	}
+
+	var recognized []manifest.SubtreeRecognized
+	var unrecognized []manifest.SubtreeUnrecognized
+	var events []manifest.EventEmitted
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dirName := entry.Name()
+		dirPath := filepath.Join(subtreeBase, dirName)
+		outputPath := dirPath
+		matched := false
+		for _, m := range provider.Subtrees {
+			ok, err := m.Matches(dirPath, dirName)
+			if err != nil {
+				return fmt.Errorf("matcher %s: %w", m.MediaType(), err)
+			}
+			if ok {
+				mt := m.MediaType()
+				eid := deriveEventID(id, mt, outputPath)
+				byteSize, _ := dirSize(dirPath)
+				if !cfg.DryRun {
+					ev := newEvent("archive-subtree-recognized", mt, outputPath, eid)
+					ev.Metadata["archive_format"] = "zip"
+					ev.Metadata["byte_size"] = byteSize
+					ev.Metadata["origin"] = "Google Takeout (fixture)"
+					if err := relayClient.Post(ev); err != nil {
+						return err
+					}
+					events = append(events, manifest.EventEmitted{
+						EventID: eid, EventType: ev.EventType, MediaType: mt, Timestamp: ev.Timestamp,
+					})
+				}
+				recognized = append(recognized, manifest.SubtreeRecognized{
+					MediaType: mt, OutputPath: outputPath, ItemCount: nil, ByteSize: byteSize, EventID: eid,
+				})
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			byteSize, _ := dirSize(dirPath)
+			emitted := false
+			if cfg.IncludeUnrecognized && !cfg.DryRun {
+				mt := "archive/google-takeout/unrecognized-subtree"
+				eid := deriveEventID(id, mt, outputPath)
+				ev := newEvent("archive-subtree-recognized", mt, outputPath, eid)
+				ev.Metadata["byte_size"] = byteSize
+				if err := relayClient.Post(ev); err != nil {
+					return err
+				}
+				events = append(events, manifest.EventEmitted{
+					EventID: eid, EventType: ev.EventType, MediaType: mt, Timestamp: ev.Timestamp,
+				})
+				emitted = true
+			}
+			unrecognized = append(unrecognized, manifest.SubtreeUnrecognized{
+				Path: filepath.Join("Takeout", dirName), FirstSeen: time.Now().UTC().Format(time.RFC3339),
+				ByteSize: byteSize, EmittedEvent: emitted,
+			})
+		}
+	}
+
+	// 7. Emit archive-import-complete
+	if !cfg.DryRun {
+		eid := deriveEventID(id, "archive/google-takeout", unpackedDir)
+		ev := newEvent("archive-import-complete", "archive/google-takeout", unpackedDir, eid)
+		ev.Metadata["archive_format"] = "zip"
+		ev.Metadata["byte_size"] = size
+		if err := relayClient.Post(ev); err != nil {
+			return err
+		}
+		events = append(events, manifest.EventEmitted{
+			EventID: eid, EventType: ev.EventType, MediaType: ev.MediaType, Timestamp: ev.Timestamp,
+		})
+	}
+
+	// 8. Write manifest
+	endTime := time.Now().UTC()
+	providerName := provider.Name
+	m := &manifest.Manifest{
+		SchemaVersion: "1.0",
+		ArchiveID:     id,
+		Source: manifest.Source{
+			OriginalFilename: filepath.Base(cfg.ArchivePath),
+			MovedTo:          sourcePath,
+			SHA256:           hash,
+			SizeBytes:        size,
+			Mtime:            mtime.UTC().Format(time.RFC3339),
+			ArchiveFormat:    "zip",
+		},
+		Provider:             &providerName,
+		MatcherVersion:       matcherVersion,
+		Timestamps:           manifest.Timestamps{Start: startTime.Format(time.RFC3339), End: endTime.Format(time.RFC3339)},
+		SubtreesRecognized:   recognized,
+		SubtreesUnrecognized: unrecognized,
+		EventsEmitted:        events,
+	}
+	if recognized == nil {
+		m.SubtreesRecognized = []manifest.SubtreeRecognized{}
+	}
+	if unrecognized == nil {
+		m.SubtreesUnrecognized = []manifest.SubtreeUnrecognized{}
+	}
+	if events == nil {
+		m.EventsEmitted = []manifest.EventEmitted{}
+	}
+	if !cfg.DryRun {
+		if err := manifest.Write(filepath.Join(unpackedDir, manifest.ManifestFilename), m); err != nil {
+			return fmt.Errorf("manifest write: %w", err)
+		}
+	}
+	return nil
+}
+
+// state detection per spec 03 § 4.2
+type unpackedState int
+
+const (
+	stateAbsent unpackedState = iota
+	stateManifestValid
+	stateManifestMissingOrInvalid
+)
+
+func detectState(dir string) unpackedState {
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		return stateAbsent
+	}
+	if !manifest.Exists(dir) {
+		return stateManifestMissingOrInvalid
+	}
+	if _, err := manifest.Read(filepath.Join(dir, manifest.ManifestFilename)); err != nil {
+		return stateManifestMissingOrInvalid
+	}
+	return stateManifestValid
+}
+
+func hashSize(p string) (sha string, size int64, mtime time.Time, err error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", 0, time.Time{}, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return "", 0, time.Time{}, err
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return "", 0, time.Time{}, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, st.ModTime(), nil
+}
+
+func dirSize(p string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(p, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		total += fi.Size()
+		return nil
+	})
+	return total, err
+}
 ```
 
-The detailed `run()` implementation is intentionally not pasted here verbatim; let the tests in C3 drive it (TDD). Reference points:
+- [ ] **Step 5: Run integration tests (Task C3)** — iterate until all pass.
 
-1. Compute `<id>` via `ident.Derive(cfg.ArchivePath)`.
-2. Compute `unpackedDir := filepath.Join(cfg.DataRoot, "unpacked", id)`.
-3. Decide state per spec 03 § 4.2 (absent / valid-manifest / invalid-manifest).
-4. `lock.Acquire(filepath.Join(unpackedDir, ".lock"))` immediately after creating the directory.
-5. Unpack via `unpacker.UnpackZip`.
-6. Move source archive into unpackedDir.
-7. Walk subtree base, run matchers, emit `archive-subtree-recognized` events via `relay.Post`.
-8. Emit `archive-import-complete` at the end.
-9. Write manifest via `manifest.Write`.
-
-Exit codes from spec 03 § 4.3.
-
-- [ ] **Step 3: Run integration tests (C3 below)**
-
-See Task C3.
-
-- [ ] **Step 4: Commit (after C3 is green)**
+- [ ] **Step 6: Commit (after C3 is green)**
 
 ```bash
-git add images/archive-importer/cmd/archive-importer/main.go
+git add images/archive-importer/cmd/archive-importer/
 git commit -m "feat(archive-importer): main flow — ingest pipeline orchestration"
 ```
 
-**Exit criteria:** Phase C3 integration tests all pass with this main flow.
+**Exit criteria:** Phase C3 integration tests all pass with this main flow; exit codes match spec 03 § 4.3.
 
 ### Task C3: End-to-end integration test
 
 **Files:**
 - Create: `images/archive-importer/cmd/archive-importer/main_test.go`
-- Create: `images/archive-importer/testdata/takeout-zip/takeout-fixture.zip` (built from script)
+- Create: `images/archive-importer/cmd/archive-importer/zip_helper_test.go`
 
-- [ ] **Step 1: Build the test fixture zip**
+- [ ] **Step 1: Build the fixture zip in Go at test-time (deterministic)**
 
-Use a small Go helper or a Bash one-liner to zip `testdata/fixtures/google-takeout-minimal/`:
+The fixture zip is NOT committed to git. Each test builds it in a `t.TempDir()` from the committed `testdata/fixtures/google-takeout-minimal/` tree, using fixed mtimes so the resulting bytes are deterministic across machines and `git checkout`-resets.
 
-```bash
-cd images/archive-importer/testdata/fixtures/google-takeout-minimal
-zip -r ../../takeout-zip/takeout-fixture.zip Takeout/
-cd -
+`zip_helper_test.go`:
+
+```go
+package main
+
+import (
+	"archive/zip"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+	"time"
+)
+
+// buildFixtureZip zips srcDir into a new file under t.TempDir() and returns
+// its path. Entries are added in sorted order with a fixed mtime so the
+// resulting zip is byte-deterministic.
+func buildFixtureZip(t *testing.T, srcDir string) string {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "takeout-EXAMPLE.zip")
+	f, err := os.Create(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	w := zip.NewWriter(f)
+	defer w.Close()
+
+	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var paths []string
+	filepath.WalkDir(srcDir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			paths = append(paths, p)
+		}
+		return nil
+	})
+	sort.Strings(paths)
+	for _, p := range paths {
+		rel, _ := filepath.Rel(srcDir, p)
+		fh := &zip.FileHeader{Name: rel, Method: zip.Deflate, Modified: fixedTime}
+		w.SetComment("")
+		writer, err := w.CreateHeader(fh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src, err := os.Open(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(writer, src)
+		src.Close()
+	}
+	return out
+}
 ```
 
-Commit the zip:
-
-```bash
-git add images/archive-importer/testdata/takeout-zip/
-git commit -m "test(archive-importer): build takeout-fixture.zip from minimal tree"
-```
+The integration tests call `buildFixtureZip(t, "../../testdata/fixtures/google-takeout-minimal")` instead of opening a committed `takeout-fixture.zip`. No binary artifact ends up in git.
 
 - [ ] **Step 2: Write the integration test**
 
@@ -2160,8 +2631,8 @@ func TestIngest_FullFixture(t *testing.T) {
 	dataRoot := t.TempDir()
 	rawDir := filepath.Join(dataRoot, "raw")
 	os.MkdirAll(rawDir, 0755)
-	src, _ := filepath.Abs("../../testdata/takeout-zip/takeout-fixture.zip")
-	target := filepath.Join(rawDir, "takeout-fixture.zip")
+	src := buildFixtureZip(t, "../../testdata/fixtures/google-takeout-minimal")
+	target := filepath.Join(rawDir, "takeout-EXAMPLE.zip")
 	copyFile(t, src, target)
 
 	_, stderr, code := runIngest(t,
@@ -2176,7 +2647,7 @@ func TestIngest_FullFixture(t *testing.T) {
 	}
 
 	// Find the unpacked dir
-	matches, _ := filepath.Glob(filepath.Join(dataRoot, "unpacked", "*-takeout-fixture"))
+	matches, _ := filepath.Glob(filepath.Join(dataRoot, "unpacked", "*-takeout-EXAMPLE"))
 	if len(matches) != 1 {
 		t.Fatalf("expected one unpacked dir, got %v", matches)
 	}
@@ -2195,7 +2666,8 @@ func TestIngest_FullFixture(t *testing.T) {
 		t.Errorf("manifest missing: %v", err)
 	}
 
-	// We expect at least 14 archive-subtree-recognized events + 1 archive-import-complete
+	// Expect exactly 14 archive-subtree-recognized events (one per known
+	// subtree in google-takeout-minimal) + exactly 1 archive-import-complete.
 	mu.Lock()
 	defer mu.Unlock()
 	subtreeEvents := 0
@@ -2208,8 +2680,8 @@ func TestIngest_FullFixture(t *testing.T) {
 			completeEvents++
 		}
 	}
-	if subtreeEvents < 14 {
-		t.Errorf("got %d subtree events, want >= 14", subtreeEvents)
+	if subtreeEvents != 14 {
+		t.Errorf("got %d subtree events, want exactly 14", subtreeEvents)
 	}
 	if completeEvents != 1 {
 		t.Errorf("got %d complete events, want 1", completeEvents)
@@ -2494,7 +2966,8 @@ metadata:
         | kubectl apply -f -
 spec:
   suspend: true
-  schedule: "0 0 1 1 0"          # Jan 1, year 0 — effectively never
+  schedule: "0 0 1 1 0"          # canonical chart sentinel for an inert
+                                 # CronJob; never fires while suspended
   jobTemplate:
     spec:
       template:
@@ -2672,14 +3145,40 @@ git commit -m "feat(archive-importer): scripts/run-job.sh operator helper"
 
 ## Phase E — CI integration
 
-### Task E1: `test:go:archive-importer` + `vuln:go:archive-importer`
+### Task E1: parameterize `vuln:go`, then add the archive-importer Go test+vuln jobs
 
 **Files:**
 - Modify: `.gitlab-ci.yml`
 
-- [ ] **Step 1: Add two new jobs**
+`test:go` already uses a `GO_MODULE_DIR` variable that `cd`s into the module before running tests, so adding a second job that overrides `GO_MODULE_DIR` works directly. But `vuln:go` hard-codes `cd images/document-scanner/scanner-session-manager`. Refactor it first, then add the new jobs.
 
-After the existing `test:go` block, add:
+- [ ] **Step 1a: Red — show the hard-coded path in `vuln:go`**
+
+```bash
+grep -n 'cd images/document-scanner' .gitlab-ci.yml
+```
+
+Expected: one match in the `vuln:go` job.
+
+- [ ] **Step 1b: Parameterize `vuln:go`**
+
+Modify the `vuln:go` block so it uses `GO_MODULE_DIR` (default value `images/document-scanner/scanner-session-manager`) the same way `test:go` does. The script's `cd` line becomes `cd "$GO_MODULE_DIR"`.
+
+```bash
+grep -n 'cd images/document-scanner' .gitlab-ci.yml
+```
+
+Expected: no matches (the literal path is gone). And:
+
+```bash
+grep -n 'GO_MODULE_DIR' .gitlab-ci.yml
+```
+
+Expected: at least 3 matches (test:go variable, test:go script, vuln:go script — and the default in vuln:go's variables).
+
+- [ ] **Step 1c: Add the two new extending jobs**
+
+After the existing `vuln:go` block, append:
 
 ```yaml
 test:go:archive-importer:
@@ -2693,14 +3192,10 @@ vuln:go:archive-importer:
     GO_MODULE_DIR: images/archive-importer
 ```
 
-(`extends:` inherits the existing job spec but overrides the module dir. If `extends` isn't already used and the duplication is small, you can also copy-paste the job spec verbatim; either is acceptable.)
-
-If `vuln:go` references the document-scanner module by hard-coded path (not via `GO_MODULE_DIR`), parameterize it the same way before adding the new job.
-
-- [ ] **Step 2: Smoke-test locally — does the YAML parse?**
+- [ ] **Step 2: YAML smoke test**
 
 ```bash
-yq '.test:go:archive-importer, ."vuln:go:archive-importer"' .gitlab-ci.yml
+yq '."test:go:archive-importer", ."vuln:go:archive-importer"' .gitlab-ci.yml
 ```
 
 Expected: prints two non-null job specs.
@@ -2709,10 +3204,10 @@ Expected: prints two non-null job specs.
 
 ```bash
 git add .gitlab-ci.yml
-git commit -m "ci: test:go + vuln:go for archive-importer module"
+git commit -m "ci: parameterize vuln:go module dir; add test:go+vuln:go for archive-importer"
 ```
 
-**Exit criteria:** YAML valid; new jobs reference the new module path.
+**Exit criteria:** `vuln:go` no longer hard-codes the document-scanner path; two new extending jobs reference `images/archive-importer`.
 
 ### Task E2: `build:archive-importer` kaniko job
 
@@ -2763,7 +3258,50 @@ git push gitlab feat/archive-importer-takeout
 
 - [ ] **Step 2: Open MR via API**
 
-Use `curl -X POST` against `/api/v4/projects/4/merge_requests` as documented in spec 02's plan F1. Title: `feat: archive-importer for Google Takeout (spec 03, archiver-ubc)`. Body: summarize the deliverables (binary, schemas, chart, CI), point at spec 03, list the gitops-side beads if any.
+```bash
+source /root/.env-gitlab   # exports GITLAB_TOKEN
+python3 <<'PY' > /tmp/mr-payload.json
+import json
+desc = """\
+Ships archive-importer v0.2.0 implementing spec 03 (archiver-ubc).
+
+## What lands
+
+- `archive-importer` Go binary + Docker image; runnable as a Kubernetes
+  Job (chart ships a suspended CronJob template) and on a workstation
+- New schemas: `notification-event.v1.1` and `archive-layout-manifest.v1`
+- Helm chart bump to 0.2.0 (new workload: ConfigMap + ServiceAccount +
+  suspended CronJob; new `recognizer.relayUrl` helper)
+- CI: `test:go:archive-importer`, `vuln:go:archive-importer`, and
+  `build:archive-importer` (kaniko)
+
+## Verified
+
+All unit + integration tests green locally. End-to-end acceptance run
+against a real Google Takeout (anonymized per spec 03 § 7.6) deferred to
+F3 (post-merge).
+
+## Spec / plan
+
+- `docs/specs/03-archive-importer-google-takeout.md`
+- `docs/plans/03-archive-importer-google-takeout.md`
+"""
+print(json.dumps({
+  "source_branch": "feat/archive-importer-takeout",
+  "target_branch": "main",
+  "title": "feat: archive-importer for Google Takeout (archiver-ubc)",
+  "description": desc,
+  "remove_source_branch": True,
+  "squash": False,
+}))
+PY
+curl -sk -X POST \
+  -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data @/tmp/mr-payload.json \
+  "https://gitlab.orac.local/api/v4/projects/4/merge_requests" \
+| python3 -c 'import json, sys; m = json.load(sys.stdin); print("MR:", m.get("web_url"))'
+```
 
 - [ ] **Step 3: Wait for pipeline green**
 
@@ -2832,7 +3370,17 @@ Expected: ~14 `archive-subtree-recognized` + 1 `archive-import-complete` entries
 
 - [ ] **Step 5: Pull the manifest off the PVC**
 
-Use a temporary debug pod or `kubectl cp` to retrieve `archive-layout-manifest.v1.json` from `unpacked/<id>/`.
+The archive-importer container is distroless and has no `tar` binary, so `kubectl cp` won't work. Spin up a one-shot busybox pod that mounts the same PVC and dump the manifest to stdout:
+
+```bash
+UNPACKED_ID=$(kubectl -n recognizer logs deployment/recognizer-notification-relay | grep archive-import-complete | tail -1 | jq -r '.output_path' | xargs basename)
+kubectl -n recognizer run manifest-cat-$RANDOM --rm -it \
+  --image=busybox:stable --restart=Never \
+  --overrides='{"spec":{"containers":[{"name":"c","image":"busybox:stable","command":["cat","/data/unpacked/'"$UNPACKED_ID"'/archive-layout-manifest.v1.json"],"volumeMounts":[{"name":"d","mountPath":"/data"}]}],"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"recognizer-data"}}]}}' \
+  > /tmp/manifest-from-cluster.json
+```
+
+If PSS=baseline blocks the inline override, ssh into a node and read the manifest off the NFS / Longhorn mount path directly (spec 02's gitops-jakd ops notes have the path).
 
 - [ ] **Step 6: Regenerate spec 03 § 7.5 example from the manifest**
 
@@ -2899,7 +3447,7 @@ B7 (lock) -------------------------> C2
                                                                                           F1 (MR) -> F2 (tag) -> F3 (acceptance) -> F4 (close)
 ```
 
-**Phase B tasks are independent of each other** (they can be done in parallel by separate subagents). Each depends only on Phase A3 (module scaffold).
+**Most Phase B tasks are independent.** B1, B2, B5, B6, B7 each depend only on Phase A3 (module scaffold). B3 (matcher interfaces) is a prerequisite for B4 (Takeout provider + matchers).
 
 **Phase D tasks have a sequence**: D1 (helper) before D2 (templates that use it); D3 (version bump) can land anywhere after D2; D4 is independent.
 
