@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://recognizer.orac.local/schemas/archive-layout-manifest/v1.json",
+  "title": "Archive Layout Manifest v1",
+  "description": "Sidecar manifest written by the archive-importer next to an unpacked archive tree. Authoritative record of what happened during the import: how the archive was identified, which subtrees the layout matcher recognized, and the notification events that were emitted. See spec 03 § 6.2 for field semantics.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "archive_id",
+    "source",
+    "provider",
+    "matcher_version",
+    "timestamps",
+    "subtrees_recognized",
+    "subtrees_unrecognized",
+    "events_emitted"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "description": "Schema version. Consumers must check this before parsing."
+    },
+    "archive_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Content-addressed identifier of the archive: SHA256-prefix + filename-stem (e.g. 'a1b2c3d4-takeout-2026-05'). Stable across re-runs of the same archive."
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "original_filename",
+        "moved_to",
+        "sha256",
+        "size_bytes",
+        "mtime",
+        "archive_format"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "original_filename": {
+          "type": "string",
+          "description": "Basename of the archive file as received."
+        },
+        "moved_to": {
+          "type": "string",
+          "description": "Path the original archive was moved to, relative to the importer's data root (e.g. 'unpacked/<id>/<original-filename>')."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA256 of the archive's raw bytes, lowercase hex."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Size of the archive's raw bytes."
+        },
+        "mtime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 UTC modification timestamp of the archive file at the time of import."
+        },
+        "archive_format": {
+          "type": "string",
+          "enum": ["zip", "tar.gz", "7z"],
+          "description": "Container format of the archive."
+        }
+      }
+    },
+    "provider": {
+      "type": ["string", "null"],
+      "description": "Which provider matched the archive's top-level layout (e.g. 'google-takeout'). Null when no provider was detected; in that case subtrees_recognized and events_emitted will be empty."
+    },
+    "matcher_version": {
+      "type": "string",
+      "description": "Version string the importer binary stamps so consumers (or future readers of old manifests) know which matcher set produced this output."
+    },
+    "timestamps": {
+      "type": "object",
+      "required": ["start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 UTC timestamp of when the import started."
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 UTC timestamp of when the import finished writing the manifest."
+        }
+      }
+    },
+    "subtrees_recognized": {
+      "type": "array",
+      "description": "One entry per matched subtree the provider recognized. Each entry corresponds to one archive-subtree-recognized event emitted to the relay.",
+      "items": {
+        "type": "object",
+        "required": ["media_type", "output_path", "item_count", "byte_size", "event_id"],
+        "additionalProperties": false,
+        "properties": {
+          "media_type": {
+            "type": "string",
+            "pattern": "^archive/.+$",
+            "description": "Hierarchical archive media type (e.g. 'archive/google-takeout/mail'). Matches the same field on the emitted notification event."
+          },
+          "output_path": {
+            "type": "string",
+            "description": "Absolute or root-relative path where the subtree lives on disk after unpack."
+          },
+          "item_count": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Number of items inside the subtree. Null from the importer (counting happens later in format handlers)."
+          },
+          "byte_size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total bytes of all files within the subtree."
+          },
+          "event_id": {
+            "type": "string",
+            "description": "Event ID of the archive-subtree-recognized event that was emitted for this subtree. Reused on re-runs (deterministic)."
+          }
+        }
+      }
+    },
+    "subtrees_unrecognized": {
+      "type": "array",
+      "description": "One entry per top-level subtree the provider did NOT recognize. Records that the importer saw it so consumers / future-us can spot gaps in the matcher catalog.",
+      "items": {
+        "type": "object",
+        "required": ["path", "first_seen", "byte_size", "emitted_event"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path to the unrecognized subtree, relative to the unpack root (e.g. 'Takeout/SomeNewService')."
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 UTC timestamp when the importer first observed this subtree."
+          },
+          "byte_size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total bytes of files within the unrecognized subtree."
+          },
+          "emitted_event": {
+            "type": "boolean",
+            "description": "True if the importer ran with --include-unrecognized AND successfully emitted an archive/<provider>/unrecognized-subtree event for it."
+          }
+        }
+      }
+    },
+    "events_emitted": {
+      "type": "array",
+      "description": "Complete record of POSTs the importer made to the notification relay. Used on re-run to reuse event IDs without re-deriving.",
+      "items": {
+        "type": "object",
+        "required": ["event_id", "event_type", "media_type", "timestamp"],
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}
