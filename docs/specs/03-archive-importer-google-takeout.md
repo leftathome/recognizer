@@ -17,7 +17,7 @@ Three properties from spec 01 § 1 carry over and constrain this design:
 
 1. **Composite archives.** A Takeout contains dozens of service subtrees. The importer must enumerate them all, not just the one we have a consumer for today.
 2. **Diverging destinations.** Mail goes to glovebox; Photos eventually goes to Immich; many subtrees have no subscriber yet. The importer emits events; raw stays on storage; consumers attach themselves to media types they care about.
-3. **Bursty scale.** A 12 GB Takeout with 500,000 messages arrives in one batch. The importer must stream-unpack, not load into memory, and must not stall the rest of the recognizer cluster.
+3. **Bursty scale.** A 12 GB Takeout with 500,000 messages arrives in one batch. The importer must avoid loading archive contents into memory (per-entry streaming decompression) and must not stall the rest of the recognizer cluster. Note: this is *seek-and-stream*, not a true byte-stream consumer -- Go's `archive/zip` requires `io.ReaderAt` and seeks to the central directory at the end of the file before reading entries. Works fine on a local file regardless of size; cannot operate on a stdin pipe or partially-downloaded zip.
 
 ## 2. Scope and Non-Goals
 
@@ -56,7 +56,9 @@ One binary. Two runtime modes. Single workflow inside the binary:
                           |
        1. Hash file (SHA256), derive <id> = <hash-prefix>-<filename-stem>
        2. Create <data-root>/unpacked/<id>/
-       3. Stream-unpack archive into unpacked/<id>/
+       3. Unpack archive into unpacked/<id>/ (zip: seek to central
+          directory, then per-entry streaming decompression -- not a
+          true byte-stream consumer; needs random access on the input)
        4. Move original archive into unpacked/<id>/ (preservation;
           source + tree + manifest live as one unit)
        5. Detect provider (Google Takeout in V1) -- walk root, look for
@@ -65,7 +67,7 @@ One binary. Two runtime modes. Single workflow inside the binary:
             - matched: emit notification-event v1.1 of type
               archive-subtree-recognized with the right media_type
             - unmatched: log warning; if --include-unrecognized, emit
-              archive/google-takeout/_unrecognized
+              archive/google-takeout/unrecognized-subtree
        7. Write archive-layout-manifest.v1.json sidecar in unpacked/<id>/
        8. Emit final archive-import-complete event
        9. Exit 0
@@ -82,15 +84,35 @@ Same image, same binary, same entry point. The chart injects defaults via env va
 
 ### 4.2 Idempotency
 
-The `<id>` is content-addressed (SHA256-prefixed). Same archive byte-for-byte produces the same `<id>`. Default behavior on re-run:
+The `<id>` is content-addressed (SHA256-prefixed). Same archive byte-for-byte produces the same `<id>`. Three possible startup states for `unpacked/<id>/`:
 
-- If `unpacked/<id>/` already exists, skip steps 2-4 (no re-extract, no re-move).
-- Steps 5-9 re-run, re-emitting all events. The manifest is overwritten with fresh timestamps. Previously-emitted event IDs are loaded from the prior manifest and re-used so downstream consumers see stable identities.
-- `--force` re-extracts even if the dir exists.
+| State | Detection | Default behavior |
+|---|---|---|
+| **Absent** | `unpacked/<id>/` does not exist | Full run (all 9 steps). |
+| **Present, manifest valid** | `archive-layout-manifest.v1.json` exists and parses against the schema | Skip steps 2-4 (no re-extract, no re-move). Re-run steps 5-9: re-emit events with the **same `event_id`s** loaded from the prior manifest's `events_emitted` (downstream consumers see stable identity). Manifest overwritten with fresh timestamps but identical event IDs. |
+| **Present, manifest absent or invalid** | `unpacked/<id>/` exists but `archive-layout-manifest.v1.json` is missing or fails schema validation | Treat as failed prior run. Exit code 5 with a clear error ("partial state at unpacked/<id>/; re-run with --force to overwrite, or remove the directory manually"). |
 
-This is a deliberate split: "the data is already on disk, but please re-tell the relay about it" is a common operator need (relay was down, or a new subscriber wants old events).
+`--force` overrides the third state: re-extract from scratch, regenerate manifest, mint new event IDs (the prior manifest is unreadable so old IDs can't be reused). `--force` is also valid in state 2 but unnecessary -- the binary skips unpack by default there.
 
-### 4.3 Language and reuse
+This is a deliberate split: "the data is already on disk, but please re-tell the relay about it" is a common operator need (relay was down, or a new subscriber wants old events). `--force` is for the rare "I think the unpack itself was wrong" case.
+
+### 4.3 CLI surface
+
+One verb (`ingest`) with these flags (env-var equivalents in parentheses):
+
+| Flag | Env | Default | Notes |
+|---|---|---|---|
+| `--data-root` | `ARCHIVE_DATA_ROOT` | `/data/incoming/archives` | Base under which `raw/` and `unpacked/` live. |
+| `--relay-url` | `NOTIFICATION_RELAY_URL` | computed in-cluster Service URL (§ 8.2) | Where to POST notification events. |
+| `--include-unrecognized` | `INCLUDE_UNRECOGNIZED=true` | `false` | Emit events for unrecognized subtrees (§ 5.3). |
+| `--force` | `--` | `false` | Re-extract even if `unpacked/<id>/` exists (§ 4.2). |
+| `--id` | `--` | derived | Override the SHA-prefix+stem id (debugging). |
+| `--dry-run` | `--` | `false` | Log everything, emit no events, write no files. |
+| `--log-level` | `LOG_LEVEL` | `info` | `debug` / `info` / `warn`. |
+
+**Exit codes:** `0` success; `1` archive unreadable / unpack failed; `2` matcher panic; `3` relay unreachable after retries; `4` manifest write failed; `5` partial-state directory (§ 4.2). Non-zero exit always implies "did not complete cleanly, do not trust partial events."
+
+### 4.4 Language and reuse
 
 Go. Matches `images/document-scanner/scanner-session-manager` (Go 1.26.x). The notification-relay client is a small new package; it does **not** import any code from `images/notification-relay` (which is Python). The relay's HTTP contract is documented in `schemas/notification-event.v1.1.schema.json`, and that's the only thing both sides share.
 
@@ -150,7 +172,7 @@ The binary holds a static slice of `Provider`s (just one in V1) and tries each `
 
 For each child of the provider base that no matcher claims, the importer logs a warning and records the subtree in the sidecar manifest under `subtrees_unrecognized`. By default, no event is emitted -- the data sits on disk for human inspection later.
 
-The `--include-unrecognized` flag (env: `INCLUDE_UNRECOGNIZED=true`) flips this on: an event with `media_type: archive/google-takeout/_unrecognized` is emitted for each unrecognized subtree, with `output_path` pointing at the actual directory. This is intended for forensic mode (running against a new-to-us Takeout to see what's there) and is off by default.
+The `--include-unrecognized` flag (env: `INCLUDE_UNRECOGNIZED=true`) flips this on: an event with `media_type: archive/google-takeout/unrecognized-subtree` is emitted for each unrecognized subtree, with `output_path` pointing at the actual directory. This is intended for forensic mode (running against a new-to-us Takeout to see what's there) and is off by default.
 
 ### 5.4 Provider abstraction headroom
 
@@ -166,6 +188,8 @@ var Providers = []Provider{
 ```
 
 A future Meta export spec is a new `Provider` plus a slice of `SubtreeMatcher`s; no changes to the binary's main flow.
+
+**Known gap for Meta:** Meta's combined Facebook + Instagram export unpacks with parallel roots (`your_facebook_activity/` AND `your_instagram_activity/`), unlike Google Takeout's single `Takeout/` wrapper. The current `Provider.Detect` signature returns one `subtreeBase`. When the Meta spec lands, either (a) the signature changes to return `[]string` (small refactor), or (b) Meta ships as two registered providers (`meta-facebook`, `meta-instagram`) that each detect their own root in the same unpacked tree. Flagging now so it isn't a surprise at spec-04 time.
 
 ## 6. Schema Changes
 
@@ -323,19 +347,26 @@ templates/archive-importer/
 
 The CronJob ships with `spec.suspend: true` and a placeholder schedule (`"0 0 1 1 0"`, Jan 1 -- effectively never). It exists as a template only. The pod spec inside has all volumeMounts (the chart's `<release>-data` PVC), env vars (data root, relay URL), service account, image, and resources -- everything except the per-archive arg.
 
-**Invocation recipe** (also lives in spec 03 § 7.6 as a copy-paste block):
+**Invocation recipe** (stock `kubectl` + `yq`; no extra wrapper required):
 
 ```bash
 ARCHIVE=takeout-2026-04-11.zip
-kubectl -n recognizer create job archive-import-${ARCHIVE%.zip}-$(date +%s) \
-  --from=cronjob/recognizer-archive-importer \
-  --dry-run=client -o yaml \
-| kubectl set args --local -f - --containers archive-importer \
-    -- ingest /data/incoming/archives/raw/$ARCHIVE \
+kubectl -n recognizer get cronjob recognizer-archive-importer -o yaml \
+| yq '
+    .spec.jobTemplate as $jt
+    | $jt
+    | .apiVersion = "batch/v1"
+    | .kind = "Job"
+    | .metadata.name = "archive-import-'${ARCHIVE%.zip}'-'$(date +%s)'"
+    | .metadata.namespace = "recognizer"
+    | .spec.template.spec.containers[0].args = ["ingest", "/data/incoming/archives/raw/'$ARCHIVE'"]
+  ' \
 | kubectl apply -f -
 ```
 
-(`kubectl create job --from=cronjob/...` copies the CronJob's pod spec; `kubectl set args --local` patches the args without applying; `kubectl apply` lands it. Stock kubectl, three lines, no extra tooling.)
+The yq filter promotes the CronJob's `jobTemplate` into a freestanding Job, renames it with a deterministic-ish suffix, and overrides the container args. All other pod-spec details (image, volumeMounts, env, serviceAccount, resources) come from the chart's CronJob template unchanged. The chart also ships this recipe as a small wrapper script at `images/archive-importer/scripts/run-job.sh` that takes one argument (the archive filename) for operators who prefer it; the script is just the yq pipeline above.
+
+*Note on alternatives considered:* `kubectl create job --from=cronjob/...` copies the pod spec but does not accept arg overrides; `kubectl set args` does not exist as a subcommand. The yq pipeline is the simplest pattern that actually works with stock tools.
 
 ### 8.2 `values.yaml` additions
 
@@ -351,19 +382,38 @@ archiveImporter:
       memory: 256Mi
     limits:
       cpu: "1"
-      memory: 2Gi            # generous; archives are stream-unpacked, not buffered
+      memory: 2Gi            # justified: a 500k-entry zip's central directory
+                             # is ~50 MiB resident; rest is buffered relay-retry
+                             # queue + per-entry decompression headroom.
   config:
     dataRoot: /data/incoming/archives
-    relayUrl: "http://{{ include \"recognizer.fullname\" . }}-notification-relay.{{ .Release.Namespace }}.svc.cluster.local:8080/notify"
+    relayUrl: ""             # empty = use computed in-cluster default
+                             # (see _helpers.tpl "recognizer.relayUrl")
     includeUnrecognized: false
     logLevel: info
 ```
 
-Default `relayUrl` is a Service-DNS template targeting the chart's own notification-relay so the workload works out of the box. README updated to point at spec 03 for the invocation recipe.
+Helm does not render `{{ }}` markers inside `values.yaml` string literals -- only inside template files. The default `relayUrl` is therefore computed in `_helpers.tpl` as a new helper:
 
-### 8.3 Per-workload tag override
+```
+{{- define "recognizer.relayUrl" -}}
+{{- printf "http://%s-notification-relay.%s.svc.cluster.local:8080/notify"
+      (include "recognizer.fullname" .)
+      .Release.Namespace -}}
+{{- end -}}
+```
 
-The chart currently locks all four workload image tags to `Chart.AppVersion`. With archive-importer bumping independently from document-scanner / notification-relay, we relax this: the `recognizer.image` helper continues to fall back to `Chart.AppVersion`, but per-workload `image.tag` overrides take precedence. Small `_helpers.tpl` adjustment; documented in the implementation plan.
+The archive-importer ConfigMap template invokes it with:
+
+```
+relayUrl: {{ .Values.archiveImporter.config.relayUrl | default (include "recognizer.relayUrl" .) | quote }}
+```
+
+Empty string in `values.yaml` means "use the computed in-cluster default"; operators override by setting a real URL.
+
+### 8.3 Image tag handling
+
+The existing `recognizer.image` helper already supports per-workload tag overrides (the chart accepts `.Values.<workload>.image.tag` and falls back to `Chart.AppVersion` when empty). Archive-importer follows the same pattern -- no helper change required. Per-workload tag overrides are how the binary's release cadence diverges from the chart's once the workloads ship at different velocities.
 
 ### 8.4 CI additions
 
@@ -425,7 +475,7 @@ Spec 03 (this document) is `v1.0`. A future v1.1 of this spec adds Meta export a
 1. Schema files committed: `schemas/notification-event.v1.1.schema.json`, `schemas/archive-layout-manifest.v1.schema.json`.
 2. This spec committed as `docs/specs/03-archive-importer-google-takeout.md` v1.0.
 3. Binary builds + tests green in CI; chart bumped to 0.2.0; `archive-importer:v0.1.0` published to the registry.
-4. Idempotency verified: same fixture archive yields byte-identical manifest (modulo timestamps) and reused event IDs across two consecutive runs.
+4. Idempotency verified: same fixture archive yields a manifest that is byte-identical across two consecutive runs after applying `jq 'del(.timestamps, .events_emitted[].timestamp)'`. Event IDs in `events_emitted` are identical across runs.
 5. A real user-supplied Google Takeout lands `archive-subtree-recognized` events in notification-relay end-to-end, with the sidecar manifest accurately enumerating the recognized + unrecognized subtrees.
 6. § 7.5's example event in this spec is regenerated from the manual acceptance run (real values, not fabricated).
 
@@ -433,6 +483,11 @@ Six criteria. All landed = V1 done. Meta export, inbox watcher, and the other de
 
 ## 10. Risks and Open Questions
 
+- **Path traversal in zip entries.** Maliciously-crafted zips can include entries with names like `../../etc/passwd`. Go 1.20+ surfaces this as `zip.ErrInsecurePath` when `GODEBUG=zipinsecurepath=0` (the default). The importer must treat that error as fatal -- never opt into the insecure-path mode. Documented in the implementation plan as a hard requirement.
+- **Disk-space pre-flight.** A 12 GB zip expanding 1.5-2x plus the source-preservation move means single-archive footprint approaches 30 GB. The chart's default 50 GB PVC fits one in-flight import; multiple concurrent imports could exhaust it. V1 ships single-threaded, but the binary should `df`-check the data root before step 3 and exit 1 if free space < (archive size * 3) with a clear message. A `--skip-space-check` escape hatch is reserved.
+- **CI runner arch.** Per spec 02 § 11, the GitLab Runner is amd64-only (helper image is `x86_64-...`; CI YAML pins build pods via `KUBERNETES_NODE_SELECTOR_arch: "kubernetes.io/arch=amd64"`). The `build:archive-importer` job inherits this; the resulting image is amd64-only until `gitops-vney` unblocks privileged dind. The chart's CronJob should also carry an `amd64` nodeAffinity so the importer doesn't get scheduled to an arm64 node and `ImagePullBackOff`. Documented in the implementation plan.
+- **Relay dedup posture.** § 4.2's idempotent re-run reuses `event_id`s, so a relay that dedups on `event_id` (or `(source, event_id)`) gracefully absorbs duplicates. A relay that does NOT dedup will see double-emits and forward them to subscribers twice on re-run. Verify the current relay's behavior in the implementation plan before claiming idempotency end-to-end; if it doesn't dedup, file a follow-up to add it (small change; the field is already in the schema).
+- **Acceptance examples and PII.** § 9.4 #6 asks for spec examples regenerated from a real Takeout. A real archive's filename can contain the user's email or name (`takeout-bob.smith@example.com-2026-04-11.zip`). PR review should redact filenames in the example JSON; alternatively, the manual acceptance step uses a deliberately-anonymized filename copy.
 - **Real-world Takeout drift.** Google renames subtree directories without notice (Hangouts -> Chat -> Google Chat in living memory). The matcher's directory-name list will need maintenance. Each matcher checks a fingerprint (file presence) in addition to the directory name, which softens the blow somewhat. A new directory name + same fingerprint usually means "add an alias to one matcher", a small PR.
 - **Very large Takeouts.** Steve's largest tested archive is ~12 GB. Streaming unpack means peak memory stays low, but **disk pressure** is real -- the unpacked tree can exceed the source by 1.5-2x for highly compressed inputs. The recognizer chart's default 50 GB Longhorn PVC will fit any plausible Takeout, but **multiple in-flight imports could exhaust storage**. V1 ships single-threaded; a `--max-concurrent` flag is reserved.
 - **Schema v1.1 strict-consumer breakage.** Per spec 01 § 4.1.1, strict consumers using `additionalProperties: false` and closed-enum validation will reject v1.1 events. The current consumer (notification-relay) does prefix-matching and is unaffected. Future consumers must check the `schema_version` field.
