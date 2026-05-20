@@ -173,8 +173,13 @@ package:chart:
     - apk add --no-cache curl ca-certificates
     - curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin/ kubeconform
   script:
-    # Derive chart version from tag (e.g. v1.2.3 -> 1.2.3) or commit-sha for branch builds.
-    - VERSION="${CI_COMMIT_TAG:-0.0.0-$CI_COMMIT_SHORT_SHA}"
+    # Derive chart version from tag (e.g. v1.2.3 -> 1.2.3) or commit-sha
+    # for branch builds. Branch builds use 0.0.0-sha<SHA> (not 0.0.0-<SHA>)
+    # because SemVer treats all-digit pre-release identifiers as numeric
+    # and forbids leading zeros, so a short SHA like 04863033 trips
+    # "Version segment starts with 0". The `sha` prefix makes the
+    # identifier alphanumeric and exempt from that rule.
+    - VERSION="${CI_COMMIT_TAG:-0.0.0-sha$CI_COMMIT_SHORT_SHA}"
     - VERSION="${VERSION#v}"
     - echo "Packaging chart at version $VERSION"
     - helm lint charts/recognizer --strict
