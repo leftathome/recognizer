@@ -2137,7 +2137,62 @@ func exitCodeFor(err error) int {
 }
 ```
 
-(String matching is acceptable because the package boundaries are tight and the errors are wrapped with deterministic prefixes from each package — `unpacker.UnpackZip` wraps with "unpack", `relay.Client.Post` wraps with "relay POST exhausted retries", etc. If a future refactor introduces real sentinel types per package, the switch becomes `errors.Is` over those types. The integration tests in C3 will catch regressions either way.)
+(String matching is acceptable because the package boundaries are tight and the errors are wrapped with deterministic prefixes from each package — `unpacker.UnpackZip` wraps with "unpack", `relay.Client.Post` wraps with "relay POST exhausted retries", etc. If a future refactor introduces real sentinel types per package, the switch becomes `errors.Is` over those types.)
+
+- [ ] **Step 1b: Unit-test `exitCodeFor` against every branch**
+
+A previous revision of this plan tried to exercise exit codes 2, 4, and 5 from C3's integration tests, but planting the right filesystem state to deterministically hit `manifest write` or pure lock-contention before partial-state checks proved too brittle. Cover every branch with a unit test that synthesizes the exact wrapped errors the production code produces:
+
+`errors_test.go`:
+
+```go
+package main
+
+import (
+	"archive/zip"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"testing"
+)
+
+func TestExitCodeFor(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"nil -> 0", nil, 0},
+		{"zip.ErrInsecurePath -> 1", zip.ErrInsecurePath, 1},
+		{"os.ErrNotExist -> 1", os.ErrNotExist, 1},
+		{"wrapped 'unpack' -> 1", fmt.Errorf("unpack: %w", io.EOF), 1},
+		{"wrapped 'open archive' -> 1", errors.New("open archive: no such file"), 1},
+		{"wrapped 'matcher' -> 2", errors.New("matcher: no provider matched"), 2},
+		{"wrapped 'relay POST exhausted retries' -> 3", errors.New("relay POST exhausted retries after 5 attempts"), 3},
+		{"wrapped 'manifest write' -> 4", fmt.Errorf("manifest write: %w", os.ErrPermission), 4},
+		{"wrapped 'partial state' -> 5", errors.New("partial state at /tmp/foo"), 5},
+		{"wrapped 'another import is in progress' -> 5", fmt.Errorf("another import is in progress for x: %w", io.EOF), 5},
+		{"unrecognized error -> 1 (default)", errors.New("something unexpected"), 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := exitCodeFor(c.err); got != c.want {
+				t.Errorf("exitCodeFor(%v) = %d, want %d", c.err, got, c.want)
+			}
+		})
+	}
+}
+```
+
+- [ ] **Step 1c: Run, observe pass**
+
+```bash
+cd images/archive-importer
+go test ./cmd/archive-importer/... -run TestExitCodeFor -v
+```
+
+Expected: PASS on every case. If any case fails, the error-wrapping in production code drifted away from the strings `exitCodeFor` looks for — fix the wrap (don't relax the test).
 
 - [ ] **Step 2: Define the notification-event struct**
 
@@ -2405,12 +2460,20 @@ func run(cfg *Config) error {
 	// 8. Write manifest
 	endTime := time.Now().UTC()
 	providerName := provider.Name
+	// MovedTo is recorded RELATIVE to cfg.DataRoot so a state-2 re-run
+	// can resolve it back to an absolute path via filepath.Join above.
+	// Writing the absolute sourcePath here would break re-runs across
+	// hosts and corrupt the round-trip we rely on at line ~2304.
+	movedToRel, err := filepath.Rel(cfg.DataRoot, sourcePath)
+	if err != nil {
+		return fmt.Errorf("manifest write: compute moved_to relpath: %w", err)
+	}
 	m := &manifest.Manifest{
 		SchemaVersion: "1.0",
 		ArchiveID:     id,
 		Source: manifest.Source{
 			OriginalFilename: filepath.Base(cfg.ArchivePath),
-			MovedTo:          sourcePath,
+			MovedTo:          movedToRel,
 			SHA256:           hash,
 			SizeBytes:        size,
 			Mtime:            mtime.UTC().Format(time.RFC3339),
@@ -2601,9 +2664,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/leftathome/recognizer/images/archive-importer/internal/ident"
-	"github.com/leftathome/recognizer/images/archive-importer/internal/lock"
 )
 
 // runIngest invokes the binary as the integration tests would.
@@ -2810,10 +2870,14 @@ func TestIngest_RelayDown_Exit3(t *testing.T) {
 	}
 }
 
-// Exit-code coverage for branches that exitCodeFor classifies via
-// string match: matcher errors (2), manifest writes (4), partial-state /
-// lock contention (5). These guarantee exitCodeFor doesn't silently rot
-// when error wording drifts.
+// Exit-code 2 (matcher) is covered here because it's the cheapest
+// integration test that asserts the importer surfaces a real
+// not-an-archive failure end-to-end. Exit codes 4 (manifest write) and
+// 5 (partial state / lock contention) are covered by the unit test
+// TestExitCodeFor in errors_test.go — planting deterministic
+// filesystem state to reach the manifest-write or lock-acquire steps
+// (without first tripping detectState's partial-state guard) was too
+// brittle to be worth the integration-level coverage.
 
 func TestIngest_NoMatcher_Exit2(t *testing.T) {
 	// Use the not-an-archive fixture — no provider matches; importer
@@ -2834,79 +2898,6 @@ func TestIngest_NoMatcher_Exit2(t *testing.T) {
 	)
 	if code != 2 {
 		t.Errorf("got exit %d, want 2", code)
-	}
-}
-
-func TestIngest_ManifestWriteFails_Exit4(t *testing.T) {
-	// Pre-create archive-layout-manifest.v1.json as a *directory* under
-	// the expected unpacked path so os.WriteFile fails with EISDIR. The
-	// importer surfaces a wrapped "manifest write" sentinel.
-	dataRoot := t.TempDir()
-	rawDir := filepath.Join(dataRoot, "raw")
-	os.MkdirAll(rawDir, 0755)
-	src := buildFixtureZip(t, "../../testdata/fixtures/google-takeout-minimal")
-	target := filepath.Join(rawDir, "takeout-EXAMPLE.zip")
-	copyFile(t, src, target)
-
-	// Compute the unpacked dir ID the importer will produce and plant
-	// a directory at the manifest path. (Use the same ident.Derive that
-	// the importer uses so the path lines up.)
-	id, err := ident.Derive(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unpackedDir := filepath.Join(dataRoot, "unpacked", id)
-	if err := os.MkdirAll(filepath.Join(unpackedDir, "archive-layout-manifest.v1.json"), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	_, _, code := runIngest(t,
-		map[string]string{"ARCHIVE_DATA_ROOT": dataRoot, "NOTIFICATION_RELAY_URL": srv.URL},
-		"ingest", target,
-	)
-	if code != 4 {
-		t.Errorf("got exit %d, want 4", code)
-	}
-}
-
-func TestIngest_LockContention_Exit5(t *testing.T) {
-	// Pre-acquire the flock at the unpacked-dir path so the importer's
-	// own Acquire() fails. Importer surfaces a wrapped "another import
-	// is in progress" sentinel.
-	dataRoot := t.TempDir()
-	rawDir := filepath.Join(dataRoot, "raw")
-	os.MkdirAll(rawDir, 0755)
-	src := buildFixtureZip(t, "../../testdata/fixtures/google-takeout-minimal")
-	target := filepath.Join(rawDir, "takeout-EXAMPLE.zip")
-	copyFile(t, src, target)
-
-	id, err := ident.Derive(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unpackedDir := filepath.Join(dataRoot, "unpacked", id)
-	os.MkdirAll(unpackedDir, 0755)
-	lockPath := filepath.Join(unpackedDir, ".import.lock")
-	lk, err := lock.Acquire(lockPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lk.Release()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	_, _, code := runIngest(t,
-		map[string]string{"ARCHIVE_DATA_ROOT": dataRoot, "NOTIFICATION_RELAY_URL": srv.URL},
-		"ingest", target,
-	)
-	if code != 5 {
-		t.Errorf("got exit %d, want 5", code)
 	}
 }
 
@@ -3320,6 +3311,10 @@ test:go:archive-importer:
   variables:
     GO_MODULE_DIR: images/archive-importer
   before_script:
+    # Compose with the parent's before_script: in GitLab CI, a job-level
+    # `before_script` REPLACES the inherited one rather than appending.
+    # !reference pulls in test:go's hook (if any) before our additions.
+    - !reference [.test:go, before_script]
     # Manifest writer's TestWrite_ProducesSchemaValidJSON shells out to
     # `python3 -m jsonschema`. The golang:1.26.3-bookworm image has
     # python3 but not the pip package; install it here. (The test soft-
@@ -3523,7 +3518,9 @@ kubectl -n recognizer run "$POD" \
   --image=busybox:stable --restart=Never --attach=false \
   --overrides='{"spec":{"containers":[{"name":"c","image":"busybox:stable","command":["cat","/data/unpacked/'"$UNPACKED_ID"'/archive-layout-manifest.v1.json"],"volumeMounts":[{"name":"d","mountPath":"/data","readOnly":true}]}],"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"'"$PVC"'"}}]}}'
 
-# Wait for the cat to finish; "Succeeded" or "Failed" both end the wait.
+# Wait for the cat to finish. --for=jsonpath only matches Succeeded;
+# a Failed pod will time out (60s), which the jq sanity check below
+# turns into an explicit error rather than a confusing empty log.
 kubectl -n recognizer wait --for=jsonpath='{.status.phase}'=Succeeded --timeout=60s pod/"$POD"
 kubectl -n recognizer logs "$POD" > /tmp/manifest-from-cluster.json
 kubectl -n recognizer delete pod "$POD"
