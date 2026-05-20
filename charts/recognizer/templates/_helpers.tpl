@@ -62,3 +62,13 @@ When `storage.backend == existing`, returns the operator-supplied
 {{- printf "%s-data" (include "recognizer.fullname" .) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+URL of the in-cluster notification-relay Service.
+Default used by archiveImporter when archiveImporter.config.relayUrl is empty.
+*/}}
+{{- define "recognizer.relayUrl" -}}
+{{- printf "http://%s-notification-relay.%s.svc.cluster.local:8080/notify"
+      (include "recognizer.fullname" .)
+      .Release.Namespace -}}
+{{- end -}}
