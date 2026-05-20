@@ -8,10 +8,13 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 || os.Args[1] != "ingest" {
-		fmt.Fprintln(os.Stderr, "usage: archive-importer ingest <archive-path>")
+	cfg, err := parseFlags(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stderr, "archive-importer: not implemented yet")
+	_ = cfg
+	// Real ingest flow is wired in Task C2.
+	fmt.Fprintln(os.Stderr, "archive-importer: parsed config; main flow not yet wired")
 	os.Exit(1)
 }
