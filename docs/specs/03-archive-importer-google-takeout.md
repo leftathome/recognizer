@@ -331,27 +331,46 @@ The wildcard expressions in earlier drafts of this spec (`archive/*/mail`) descr
 
 ### 7.5 Worked example
 
-Operator runs the importer against `takeout-2026-04-11.zip` (SHA256 prefix `4f2a8b3c`). Example notification event posted for Mail:
+> All values in this section are **synthetic sentinels**, not real-run output. The `00000000` SHA prefix, `EXAMPLE` filename stem, and `evt_EXAMPLE_*` event IDs make this unambiguous. § 7.6 codifies the PII-scrubbing rules that any future example update must follow.
+
+Operator runs the importer against `takeout-EXAMPLE.zip` (SHA256 prefix `00000000`). Example notification event posted for Mail:
 
 ```json
 {
   "schema_version": "1.1",
   "source": "archive-recognizer",
   "event_type": "archive-subtree-recognized",
-  "event_id": "evt_01HFXXX...",
+  "event_id": "evt_EXAMPLE_002",
   "timestamp": "2026-05-19T11:30:08Z",
   "media_type": "archive/google-takeout/mail",
-  "output_path": "/data/incoming/archives/unpacked/4f2a8b3c-takeout-2026-04-11/Takeout/Mail",
+  "output_path": "/data/incoming/archives/unpacked/00000000-takeout-EXAMPLE/Takeout/Mail",
   "metadata": {
     "archive_format": "zip",
     "byte_size": 8451220992,
-    "origin": "Google Takeout 2026-04-11",
-    "parent_event_id": "evt_01HFWYY..."
+    "origin": "Google Takeout (fixture)",
+    "parent_event_id": "evt_EXAMPLE_001"
   }
 }
 ```
 
 Glovebox's subscriber reads `output_path`, walks the directory, finds the `*.mbox` file, runs its mbox importer against it. Glovebox's own per-format manifest records what messages were imported; that manifest lives in a glovebox-controlled location, not next to the importer's manifest.
+
+### 7.6 PII scrubbing rules for spec examples
+
+Any example in this spec (or in spec 03 follow-ups) must satisfy these rules. They apply to **everything that ends up committed to git**, including JSON examples, copy-pasted log output, and screenshot text.
+
+| Field | Real-run value can contain | Replacement in committed examples |
+|---|---|---|
+| Archive filename / `source.original_filename` | If the operator renamed the file before importing, it may contain an email address, username, or human name | Use `takeout-EXAMPLE.zip` (or `takeout-fixture-NN.zip` if multiple are referenced). Never include `@` or a person's name in committed examples. |
+| `archive_id` / `<id>` and any path containing it | A SHA-prefix concatenated with the (possibly PII-laden) filename stem | Use `00000000-takeout-EXAMPLE` (or `00000000-takeout-fixture-NN`). |
+| `source.sha256` | A real archive's hash; not PII, but enables correlation if the same archive is shared elsewhere | Use `"0000000000000000000000000000000000000000000000000000000000000000"` (64 zeros) or `"..."`. |
+| `metadata.origin` | Free-form; may include account email or display name | Use `"Google Takeout (fixture)"`. |
+| `event_id`, `parent_event_id` | Real KSUID/ULID; not PII | Use `evt_EXAMPLE_NNN`. |
+| `output_path` | Includes `<id>`; inherits the filename-stem leakage | Rewrite consistently with the `<id>` replacement above. |
+| Inner subtree filenames (`Takeout/Mail/All mail Including Spam and Trash.mbox`) | Google-canonical names; generic | Safe to keep verbatim. |
+| `timestamps.*`, `size_bytes`, `item_count` | Numerical / dates | Safe to keep verbatim. |
+
+**Process for regenerating examples (§ 9.4 #6):** run the importer against a deliberately-anonymized copy of the real Takeout where the filename is already `takeout-EXAMPLE.zip`. The resulting manifest and event JSON drop in directly. If you forget and run it against the canonical filename, scrub before committing using the table above. Pre-commit grep for: `@`, the operator's last name, any account-identifying string. The PR review checklist mentions this; the implementation plan documents it as a release-gate step.
 
 ## 8. Chart and CI Integration
 
@@ -371,7 +390,7 @@ The CronJob ships with `spec.suspend: true` and a placeholder schedule (`"0 0 1 
 **Invocation recipe** (stock `kubectl` + `yq`; no extra wrapper required):
 
 ```bash
-ARCHIVE=takeout-2026-04-11.zip
+ARCHIVE=takeout-EXAMPLE.zip       # replace with the real filename you placed in raw/
 kubectl -n recognizer get cronjob recognizer-archive-importer -o yaml \
 | yq '
     .spec.jobTemplate as $jt
@@ -475,7 +494,7 @@ Spec 03 (this document) is `v1.0`. A future v1.1 of this spec adds Meta export a
 - `google-takeout-mail-only/` -- just `Takeout/Mail/foo.mbox`. Absent-subtree handling.
 - `google-takeout-with-unknown/` -- has `Takeout/SomeNewService/`. Validates the unrecognized path.
 - `not-an-archive/` -- random directory with no `Takeout/` root. Provider detection failure.
-- `takeout-zip/takeout-2026-04-11.zip` -- zipped version of `google-takeout-minimal/`. Validates the unpacker.
+- `takeout-zip/takeout-fixture.zip` -- zipped version of `google-takeout-minimal/`. Validates the unpacker. Filename deliberately date-less and sentinel-named per § 7.6.
 
 ### 9.2 Test pyramid
 
@@ -503,7 +522,7 @@ Spec 03 (this document) is `v1.0`. A future v1.1 of this spec adds Meta export a
 3. Binary builds + tests green in CI; chart bumped to 0.2.0; `archive-importer:v0.1.0` published to the registry.
 4. Idempotency verified: same fixture archive yields a manifest that is byte-identical across two consecutive runs after applying `jq 'del(.timestamps, .events_emitted[].timestamp, .subtrees_unrecognized[].first_seen)'`. Event IDs in `events_emitted` are identical across runs.
 5. A real user-supplied Google Takeout lands `archive-subtree-recognized` events in notification-relay end-to-end, with the sidecar manifest accurately enumerating the recognized + unrecognized subtrees.
-6. § 7.5's example event in this spec is regenerated from the manual acceptance run (real values, not fabricated).
+6. § 7.5's example event in this spec is regenerated from the manual acceptance run, **with the § 7.6 scrubbing rules applied** before commit (no real archive filenames, account-identifying strings, or full content hashes land in git).
 
 Six criteria. All landed = V1 done. Meta export, inbox watcher, and the other deferred items become their own spec / plan / MR cycles.
 
@@ -513,7 +532,7 @@ Six criteria. All landed = V1 done. Meta export, inbox watcher, and the other de
 - **Disk-space pre-flight.** A 12 GB zip expanding 1.5-2x plus the source-preservation move means single-archive footprint approaches 30 GB. The chart's default 50 GB PVC fits one in-flight import; multiple concurrent imports could exhaust it. V1 ships single-threaded, but the binary should `df`-check the data root before step 3 and exit 1 if free space < (archive size * 3) with a clear message. A `--skip-space-check` escape hatch is reserved.
 - **CI runner arch.** Per spec 02 § 11, the GitLab Runner is amd64-only (helper image is `x86_64-...`; CI YAML pins build pods via `KUBERNETES_NODE_SELECTOR_arch: "kubernetes.io/arch=amd64"`). The `build:archive-importer` job inherits this; the resulting image is amd64-only until `gitops-vney` unblocks privileged dind. The chart's CronJob should also carry an `amd64` nodeAffinity so the importer doesn't get scheduled to an arm64 node and `ImagePullBackOff`. Documented in the implementation plan.
 - **Relay dedup posture.** § 4.2's idempotent re-run reuses `event_id`s, so a relay that dedups on `event_id` (or `(source, event_id)`) gracefully absorbs duplicates. A relay that does NOT dedup will see double-emits and forward them to subscribers twice on re-run. Verify the current relay's behavior in the implementation plan before claiming idempotency end-to-end; if it doesn't dedup, file a follow-up to add it (small change; the field is already in the schema).
-- **Acceptance examples and PII.** § 9.4 #6 asks for spec examples regenerated from a real Takeout. A real archive's filename can contain the user's email or name (`takeout-bob.smith@example.com-2026-04-11.zip`). PR review should redact filenames in the example JSON; alternatively, the manual acceptance step uses a deliberately-anonymized filename copy.
+- **Acceptance examples and PII.** § 9.4 #6 asks for spec examples regenerated from a real Takeout. A real archive's filename can contain the user's email or name (the spec text deliberately does not include a sample of what that looks like, to avoid putting any such pattern in git). § 7.6 codifies the scrubbing rules every example must follow; the implementation plan adds the rules as a pre-commit / PR-review checklist item.
 - **Real-world Takeout drift.** Google renames subtree directories without notice (Hangouts -> Chat -> Google Chat in living memory). The matcher's directory-name list will need maintenance. Each matcher checks a fingerprint (file presence) in addition to the directory name, which softens the blow somewhat. A new directory name + same fingerprint usually means "add an alias to one matcher", a small PR.
 - **Very large Takeouts.** Steve's largest tested archive is ~12 GB. Streaming unpack means peak memory stays low, but **disk pressure** is real -- the unpacked tree can exceed the source by 1.5-2x for highly compressed inputs. The recognizer chart's default 50 GB Longhorn PVC will fit any plausible Takeout, but **multiple in-flight imports could exhaust storage**. V1 ships single-threaded; a `--max-concurrent` flag is reserved.
 - **Schema v1.1 strict-consumer breakage.** Per spec 01 § 4.1.1, strict consumers using `additionalProperties: false` and closed-enum validation will reject v1.1 events. The current consumer (notification-relay) does prefix-matching and is unaffected. Future consumers must check the `schema_version` field.
