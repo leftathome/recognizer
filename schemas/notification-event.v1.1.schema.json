@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.io/schemas/capture/notification-event.v1.1.schema.json",
+  "title": "Capture Notification Event v1.1",
+  "description": "Additive extension of v1.0 (notification-event.v1.schema.json) to accommodate archive-importer workloads (spec 03). v1.0 events continue to validate against this schema; producers stamp schema_version=1.1 only when emitting archive-related events.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "source",
+    "event_type",
+    "timestamp",
+    "output_path",
+    "media_type",
+    "metadata",
+    "node_name"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0", "1.1"],
+      "description": "Schema version. v1.0 events validate against this schema for backward compatibility; producers of archive events stamp 1.1."
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "optical-ripper",
+        "document-scanner",
+        "archive-recognizer",
+        "archive-unpacker",
+        "archive-format-handler"
+      ],
+      "description": "Which capture or archive workload produced this event. v1.0: optical-ripper, document-scanner. v1.1 adds the archive-* sources."
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "disc-extraction-complete",
+        "scan-session-complete",
+        "archive-unpacked",
+        "archive-subtree-recognized",
+        "archive-import-complete"
+      ],
+      "description": "The type of event. v1.0: disc-extraction-complete, scan-session-complete. v1.1 adds the archive-* event types."
+    },
+    "event_id": {
+      "type": "string",
+      "description": "Stable identifier for the event. Optional for v1.0 events (which historically did not carry one); archive-importer emits a deterministic hash so re-runs produce identical IDs (see spec 03 § 4.2)."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of event emission."
+    },
+    "output_path": {
+      "type": "string",
+      "description": "Absolute path on the cluster's data volume where the captured/extracted output was written."
+    },
+    "media_type": {
+      "description": "The type of media/content captured. v1.0 listed a closed enum of capture media types; v1.1 loosens this with an additional pattern branch so archive workloads can emit hierarchical archive/* media types without a schema bump per new provider.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "video/uhd-bluray",
+            "video/bluray",
+            "video/dvd",
+            "audio/cd",
+            "audio/dvd-audio",
+            "data/iso",
+            "scan/adf-session",
+            "scan/flatbed-session"
+          ]
+        },
+        {
+          "type": "string",
+          "pattern": "^archive/.+$"
+        }
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Source-specific metadata. Capture workloads populate the original v1.0 fields; archive workloads populate the v1.1 fields. All fields are optional individually -- v1.0's source_device requirement is relaxed because archive events have no physical source device.",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": ["string", "null"],
+          "description": "Media title from metadata lookup (OMDb for video, MusicBrainz for audio). Null for data discs and scans."
+        },
+        "year": {
+          "type": ["integer", "null"],
+          "description": "Release year from metadata lookup. Null when not applicable."
+        },
+        "source_device": {
+          "type": ["string", "null"],
+          "description": "Device identifier matching the NFD label value (e.g. 'pioneer-bdr-xs07uhd', 'epson-ds-1630'). Required for capture workloads; null/absent for archive workloads."
+        },
+        "disc_label": {
+          "type": ["string", "null"],
+          "description": "Volume label read from the disc. Null for scans/archives."
+        },
+        "page_count": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Number of pages in a scan session. Null for disc rips/archives."
+        },
+        "session_id": {
+          "type": ["string", "null"],
+          "description": "Scan session identifier matching the session directory name. Null for disc rips/archives."
+        },
+        "archive_format": {
+          "type": ["string", "null"],
+          "enum": ["zip", "tar.gz", "7z", "none", null],
+          "description": "Archive container format. v1.1 only. Null/absent for capture workloads."
+        },
+        "item_count": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Number of inner items the archive contains (e.g. files in a subtree). Null when not counted at this stage."
+        },
+        "byte_size": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Total byte size of the artifact described by this event."
+        },
+        "origin": {
+          "type": ["string", "null"],
+          "description": "Free-form provenance string (e.g. 'Google Takeout (fixture)'). v1.1 only."
+        },
+        "parent_event_id": {
+          "type": ["string", "null"],
+          "description": "Event ID of the archive-unpacked event that this subtree/import-complete event chains from. v1.1 only."
+        }
+      }
+    },
+    "node_name": {
+      "type": "string",
+      "description": "Kubernetes node name where the workload ran. Useful for debugging and auditing."
+    }
+  }
+}
