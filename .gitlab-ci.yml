@@ -70,6 +70,7 @@ vuln:go:
   image: golang:1.26.3-bookworm
   extends: .cache
   variables:
+    GO_MODULE_DIR: images/document-scanner/scanner-session-manager
     # govulncheck downloads the vulnerability database into memory.
     KUBERNETES_MEMORY_REQUEST: "1Gi"
     KUBERNETES_MEMORY_LIMIT: "2Gi"
@@ -78,9 +79,33 @@ vuln:go:
     - go install golang.org/x/vuln/cmd/govulncheck@latest
   script:
     - export PATH="$PATH:$(go env GOPATH)/bin"
-    - cd images/document-scanner/scanner-session-manager
+    - cd "$GO_MODULE_DIR"
     - govulncheck ./...
   allow_failure: false
+
+# Per-module extending jobs for the archive-importer (spec 03). Uses the
+# same GO_MODULE_DIR pattern test:go and vuln:go above already expose so
+# we get free Go test + vuln coverage by overriding one variable.
+test:go:archive-importer:
+  extends: test:go
+  variables:
+    GO_MODULE_DIR: images/archive-importer
+  before_script:
+    # Compose with the parent's before_script: in GitLab CI, a job-level
+    # before_script REPLACES the inherited one rather than appending.
+    # !reference pulls in test:go's hook before our additions.
+    - !reference [test:go, before_script]
+    # Manifest writer's TestWrite_ProducesSchemaValidJSON shells out to
+    # `python3 -m jsonschema`. The golang:1.26.3-bookworm image has
+    # python3 but not the pip package; install it here. (The test soft-
+    # skips if the import fails, but we want it actually running in CI.)
+    - apt-get update && apt-get install -y --no-install-recommends python3-pip
+    - pip install --break-system-packages jsonschema
+
+vuln:go:archive-importer:
+  extends: vuln:go
+  variables:
+    GO_MODULE_DIR: images/archive-importer
 
 scan:trivy-fs:
   stage: test
@@ -153,6 +178,12 @@ build:notification-relay:
   variables:
     DOCKERFILE: images/notification-relay/Dockerfile
     COMPONENT: notification-relay
+
+build:archive-importer:
+  extends: .build
+  variables:
+    DOCKERFILE: images/archive-importer/Dockerfile
+    COMPONENT: archive-importer
 
 # ---------------------------------------------------------------------------
 # C3: package stage. helm lint --strict + kubeconform (with CRDs catalog) +
