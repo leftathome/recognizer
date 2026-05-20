@@ -25,6 +25,33 @@ spec:
       {{- end }}
       nodeSelector:
         {{- toYaml .Values.opticalRipper.nodeSelector | nindent 8 }}
+      # ARM's container entrypoint refuses to start if /home/arm isn't
+      # group-owned by GID 1000 (the in-container 'arm' user). emptyDir
+      # volumes default to root:root, so without fsGroup the
+      # arm_user_files_setup.sh script bails with
+      # "ARM does not have permissions to /home/arm using 1000:1000".
+      # fsGroup gives the volume GID 1000 + sets the SGID bit so files
+      # ARM creates inherit it. UID stays root for the supervisord-init
+      # phase; ARM drops to UID 1000 internally for the ripping process.
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      initContainers:
+        # Belt + suspenders: chown /home/arm to 1000:1000 even though
+        # fsGroup should have already adjusted the GID. ARM's script
+        # specifically checks for UID 1000 too ("Folder permissions->
+        # 0:0" in the error means it saw root:root), and fsGroup only
+        # touches the group bit.
+        - name: chown-home
+          image: busybox:stable
+          command: ["sh", "-c", "chown -R 1000:1000 /home/arm /out && chmod 0775 /home/arm /out"]
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: incoming
+              mountPath: /out
+            - name: arm-home
+              mountPath: /home/arm
       containers:
         - name: arm
           image: "{{ .Values.opticalRipper.image.repository }}:{{ .Values.opticalRipper.image.tag }}"
