@@ -3314,7 +3314,7 @@ test:go:archive-importer:
     # Compose with the parent's before_script: in GitLab CI, a job-level
     # `before_script` REPLACES the inherited one rather than appending.
     # !reference pulls in test:go's hook (if any) before our additions.
-    - !reference [.test:go, before_script]
+    - !reference [test:go, before_script]
     # Manifest writer's TestWrite_ProducesSchemaValidJSON shells out to
     # `python3 -m jsonschema`. The golang:1.26.3-bookworm image has
     # python3 but not the pip package; install it here. (The test soft-
