@@ -37,14 +37,22 @@ spec:
         fsGroup: 1000
         fsGroupChangePolicy: "OnRootMismatch"
       initContainers:
-        # Belt + suspenders: chown /home/arm to 1000:1000 even though
-        # fsGroup should have already adjusted the GID. ARM's script
-        # specifically checks for UID 1000 too ("Folder permissions->
-        # 0:0" in the error means it saw root:root), and fsGroup only
-        # touches the group bit.
+        # Chown the writable mounts ARM checks at startup. fsGroup
+        # already sets GID to 1000 on emptyDirs but the entrypoint
+        # script's permission check requires UID 1000 too.
+        # Also seeds /etc/arm/config from the ConfigMap source -- the
+        # ConfigMap volume itself is root-owned and read-only, so we
+        # copy its contents into an emptyDir we can chown.
         - name: chown-home
           image: busybox:stable
-          command: ["sh", "-c", "chown -R 1000:1000 /home/arm /out && chmod 0775 /home/arm /out"]
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              cp -r /etc/arm/config-source/. /etc/arm/config/
+              chown -R 1000:1000 /home/arm /out /etc/arm/config
+              chmod 0775 /home/arm /out /etc/arm/config
           securityContext:
             runAsUser: 0
           volumeMounts:
@@ -52,6 +60,11 @@ spec:
               mountPath: /out
             - name: arm-home
               mountPath: /home/arm
+            - name: arm-config-source
+              mountPath: /etc/arm/config-source
+              readOnly: true
+            - name: arm-config
+              mountPath: /etc/arm/config
       containers:
         - name: arm
           image: "{{ .Values.opticalRipper.image.repository }}:{{ .Values.opticalRipper.image.tag }}"
@@ -87,7 +100,13 @@ spec:
         - name: incoming
           persistentVolumeClaim:
             claimName: {{ include "recognizer.dataClaimName" . }}
+        # arm-config is a writable emptyDir that the chown-home init
+        # populates from arm-config-source (the ConfigMap below).
+        # ARM's startup script needs UID 1000 on the dir, which a
+        # ConfigMap mount can't provide (read-only, root-owned).
         - name: arm-config
+          emptyDir: {}
+        - name: arm-config-source
           configMap:
             name: {{ include "recognizer.fullname" . }}-arm-config
         - name: arm-home
