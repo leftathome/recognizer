@@ -7,7 +7,12 @@ _SCHEMA_DIR = os.environ.get(
     "CAPTURE_SCHEMA_DIR",
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "schemas"),
 )
-_SCHEMA_PATH = os.path.join(_SCHEMA_DIR, "notification-event.v1.schema.json")
+# v1.1 is an additive superset of v1.0 (new source/event_type enum
+# entries, loosened media_type, optional event_id and v1.1-only metadata
+# fields). Validating against v1.1 also accepts every valid v1.0 event
+# because the schema_version field's enum is ["1.0", "1.1"] and the
+# required-fields list is unchanged. See archiver spec 03 § 6.1.
+_SCHEMA_PATH = os.path.join(_SCHEMA_DIR, "notification-event.v1.1.schema.json")
 
 with open(_SCHEMA_PATH) as _f:
     _SCHEMA = json.load(_f)
