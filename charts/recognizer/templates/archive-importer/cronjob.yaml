@@ -55,6 +55,13 @@ spec:
               envFrom:
                 - configMapRef:
                     name: {{ include "recognizer.fullname" . }}-archive-importer
+              env:
+                # NODE_NAME populates Event.node_name (required by both
+                # notification-event v1.0 and v1.1 schemas).
+                - name: NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
               args: ["ingest", "/data/incoming/archives/raw/REPLACE-ME.zip"]
               volumeMounts:
                 - name: data
