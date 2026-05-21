@@ -68,7 +68,7 @@ URL of the in-cluster notification-relay Service.
 Default used by archiveImporter when archiveImporter.config.relayUrl is empty.
 */}}
 {{- define "recognizer.relayUrl" -}}
-{{- printf "http://%s-notification-relay.%s.svc.cluster.local:8080/notify"
+{{- printf "http://%s-notification-relay.%s.svc.cluster.local:8080/event"
       (include "recognizer.fullname" .)
       .Release.Namespace -}}
 {{- end -}}
