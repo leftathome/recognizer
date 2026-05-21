@@ -20,6 +20,14 @@ spec:
         {{- include "recognizer.labels" . | nindent 8 }}
         app.kubernetes.io/component: notification-relay
     spec:
+      # Pin to amd64: the kaniko CI build is single-arch (amd64 only),
+      # so on arm64 nodes the container crashes with
+      # 'exec /usr/local/bin/python: exec format error'. Lift this
+      # constraint once the chart's images ship multi-arch manifests
+      # (tracked: archiver-side, after gitops-vney enables privileged
+      # runner for buildx).
+      nodeSelector:
+        kubernetes.io/arch: amd64
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
