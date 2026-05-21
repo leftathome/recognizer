@@ -58,10 +58,18 @@ func run(cfg *Config) error {
 // the unpacked tree, and emits per-subtree + archive-import-complete
 // events. See spec 03 § 4.
 func runZipImport(cfg *Config) error {
-	id, err := deriveID(cfg)
+	// Single pass over the source file: hash + stat + derive id.
+	// Avoids the previous design where we hashed the file twice
+	// (once for ident, once for the manifest source.sha256).
+	hash, size, mtime, err := ident.HashFile(cfg.ArchivePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("open archive: %w", err)
 	}
+	id := cfg.IDOverride
+	if id == "" {
+		id = ident.DeriveID(filepath.Base(cfg.ArchivePath), hash)
+	}
+
 	unpackedDir := filepath.Join(cfg.DataRoot, "unpacked", id)
 	relayClient := relay.NewClient(cfg.RelayURL, 3, time.Second)
 
@@ -89,12 +97,16 @@ func runZipImport(cfg *Config) error {
 			return fmt.Errorf("move source: %w", err)
 		}
 	} else {
+		// State-2 re-run: trust the prior manifest's source fields
+		// rather than re-hashing. The archive_id matched, which means
+		// the content matched, which means the prior sha256 is still
+		// the file's sha256.
 		sourcePath = filepath.Join(cfg.DataRoot, priorManifest.Source.MovedTo)
-	}
-
-	hash, size, mtime, err := hashSize(sourcePath)
-	if err != nil {
-		return fmt.Errorf("hash source: %w", err)
+		hash = priorManifest.Source.SHA256
+		size = priorManifest.Source.SizeBytes
+		if t, perr := time.Parse(time.RFC3339, priorManifest.Source.Mtime); perr == nil {
+			mtime = t
+		}
 	}
 
 	provider := matcher.GoogleTakeoutProvider()
@@ -198,10 +210,16 @@ func runZipImport(cfg *Config) error {
 // is the downstream consumer; it reads the file directly and handles
 // per-message parsing.
 func runMboxImport(cfg *Config) error {
-	id, err := deriveID(cfg)
+	// Single pass: hash + stat + derive id (mirrors runZipImport).
+	hash, size, mtime, err := ident.HashFile(cfg.ArchivePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("open archive: %w", err)
 	}
+	id := cfg.IDOverride
+	if id == "" {
+		id = ident.DeriveID(filepath.Base(cfg.ArchivePath), hash)
+	}
+
 	unpackedDir := filepath.Join(cfg.DataRoot, "unpacked", id)
 	relayClient := relay.NewClient(cfg.RelayURL, 3, time.Second)
 
@@ -227,11 +245,11 @@ func runMboxImport(cfg *Config) error {
 		}
 	} else {
 		sourcePath = filepath.Join(cfg.DataRoot, priorManifest.Source.MovedTo)
-	}
-
-	hash, size, mtime, err := hashSize(sourcePath)
-	if err != nil {
-		return fmt.Errorf("hash source: %w", err)
+		hash = priorManifest.Source.SHA256
+		size = priorManifest.Source.SizeBytes
+		if t, perr := time.Parse(time.RFC3339, priorManifest.Source.Mtime); perr == nil {
+			mtime = t
+		}
 	}
 
 	mt := "archive/google-takeout/mail"
@@ -270,17 +288,6 @@ func runMboxImport(cfg *Config) error {
 }
 
 // --- shared helpers ---
-
-func deriveID(cfg *Config) (string, error) {
-	if cfg.IDOverride != "" {
-		return cfg.IDOverride, nil
-	}
-	id, err := ident.Derive(cfg.ArchivePath)
-	if err != nil {
-		return "", fmt.Errorf("open archive: %w", err)
-	}
-	return id, nil
-}
 
 func ensureStateAndManifest(cfg *Config, unpackedDir string) (*manifest.Manifest, error) {
 	switch detectState(unpackedDir) {
@@ -395,24 +402,6 @@ func deriveEventID(archiveID, mediaType, outputPath string) string {
 	io.WriteString(h, "|")
 	io.WriteString(h, outputPath)
 	return "evt_" + hex.EncodeToString(h.Sum(nil))[:16]
-}
-
-func hashSize(p string) (sha string, size int64, mtime time.Time, err error) {
-	f, err := os.Open(p)
-	if err != nil {
-		return "", 0, time.Time{}, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return "", 0, time.Time{}, err
-	}
-	h := sha256.New()
-	n, err := io.Copy(h, f)
-	if err != nil {
-		return "", 0, time.Time{}, err
-	}
-	return hex.EncodeToString(h.Sum(nil)), n, st.ModTime(), nil
 }
 
 func dirSize(p string) (int64, error) {
