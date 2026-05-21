@@ -16,5 +16,5 @@ data:
     AUDIO_COMPLETED_PATH: "/out/audio"
     DATA_COMPLETED_PATH: "/out/data"
     HANDBRAKE_PRESET: "disabled"
-    NOTIFY_WEBHOOK: "http://notification-relay.capture.svc.cluster.local:8080/event"
+    NOTIFY_WEBHOOK: "{{ include "recognizer.relayUrl" . }}"
 {{- end }}
