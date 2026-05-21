@@ -32,6 +32,18 @@ spec:
           restartPolicy: Never
           nodeSelector:
             kubernetes.io/arch: amd64
+          # PVC is owned by uid 1000:1000 (chowned by the optical-ripper
+          # init container; first writer to the volume sets the perms).
+          # The archive-importer's distroless base default user is
+          # nonroot (uid 65532), which doesn't match -- pods fail with
+          # 'mkdir /data/incoming/archives/unpacked: permission denied'.
+          # Run as 1000:1000 + fsGroup 1000 so writes succeed and any
+          # files we create are also group-readable by ARM/relay/etc.
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            fsGroupChangePolicy: OnRootMismatch
           {{- with .Values.image.pullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
