@@ -19,12 +19,23 @@ NAMESPACE="${NAMESPACE:-recognizer}"
 CRONJOB="${CRONJOB:-recognizer-archive-importer}"
 
 STEM="${ARCHIVE%.zip}"
-# Kubernetes object names must be RFC 1123 subdomains: lowercase
-# alphanumerics + '-' + '.'. Google Takeout filenames carry uppercase
-# T/Z from their timestamp format, so lowercase the stem and replace
-# anything outside [a-z0-9.-] with '-'.
-STEM_NORM="$(printf '%s' "$STEM" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.-' '-' | sed 's/-\+/-/g; s/^-*//; s/-*$//')"
+STEM="${STEM%.tar.gz}"
+STEM="${STEM%.7z}"
+STEM="${STEM%.mbox}"
+# k8s label values: lowercase alphanumerics + '-' + '_' + '.', start/end
+# alphanumeric, max 63 chars. Job names also feed labels via
+# batch.kubernetes.io/job-name. Lowercase, replace anything outside
+# [a-z0-9-] with '-' (drop '.' entirely since multi-label names are
+# error-prone), collapse runs of '-', strip leading/trailing.
+STEM_NORM="$(printf '%s' "$STEM" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed 's/-\+/-/g; s/^-*//; s/-*$//')"
 SUFFIX="$(date +%s)$(openssl rand -hex 2 2>/dev/null || head -c 4 /dev/urandom | xxd -p)"
+# Truncate stem so "archive-import-<stem>-<suffix>" fits in 63 chars.
+PREFIX="archive-import-"
+BUDGET=$(( 63 - ${#PREFIX} - 1 - ${#SUFFIX} ))
+if (( ${#STEM_NORM} > BUDGET )); then
+  STEM_NORM="${STEM_NORM:0:$BUDGET}"
+  STEM_NORM="${STEM_NORM%-}"
+fi
 
 kubectl -n "$NAMESPACE" get cronjob "$CRONJOB" -o yaml \
 | yq '
