@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // UnpackZip extracts srcZip into dstDir.
@@ -22,7 +21,12 @@ func UnpackZip(srcZip, dstDir string) error {
 	}
 	defer r.Close()
 	for _, f := range r.File {
-		if !filepath.IsLocal(f.Name) || strings.Contains(f.Name, "..") {
+		// filepath.IsLocal handles ALL real path-traversal cases (absolute
+		// paths, '.' / '..' as path *elements*, volume letters, reserved
+		// Windows names). It correctly accepts filenames that simply
+		// contain consecutive dots in the middle (e.g. "Inc..html"),
+		// which a naive strings.Contains(name, "..") would falsely reject.
+		if !filepath.IsLocal(f.Name) {
 			return fmt.Errorf("unpacker: refusing insecure entry %q: %w", f.Name, zip.ErrInsecurePath)
 		}
 		dst := filepath.Join(dstDir, f.Name)
