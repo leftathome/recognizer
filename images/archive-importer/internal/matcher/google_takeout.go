@@ -82,6 +82,7 @@ func GoogleTakeoutProvider() Provider {
 			dirMatcher{name: "Groups", mt: "archive/google-takeout/groups", desc: "Google Groups memberships + posts"},
 			dirMatcher{nameAny: []string{"Home App"}, mt: "archive/google-takeout/home", desc: "Google Home App data"},
 			dirMatcher{name: "Maps", mt: "archive/google-takeout/maps", desc: "Saved places, reviews, contributions"},
+			dirMatcher{name: "Nest", mt: "archive/google-takeout/nest", desc: "Nest device + automation history"},
 			dirMatcher{name: "News", mt: "archive/google-takeout/news", desc: "Google News follows + saved articles"},
 			dirMatcher{name: "Profile", mt: "archive/google-takeout/profile", desc: "Google account profile"},
 			dirMatcher{name: "Saved", mt: "archive/google-takeout/saved", desc: "Saved items from Search and Maps"},
