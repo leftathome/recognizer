@@ -117,7 +117,7 @@ scan:trivy-fs:
 helm:lint:
   stage: test
   image:
-    name: alpine/helm:3.14.4
+    name: alpine/helm:3.21.0
     entrypoint: [""]
   script:
     - helm lint charts/recognizer
@@ -193,7 +193,7 @@ build:archive-importer:
 package:chart:
   stage: package
   image:
-    name: alpine/helm:3.14.4
+    name: alpine/helm:3.21.0
     entrypoint: [""]
   variables:
     KUBERNETES_CPU_REQUEST: "250m"
