@@ -63,8 +63,8 @@
         },
         "archive_format": {
           "type": "string",
-          "enum": ["zip", "tar.gz", "7z"],
-          "description": "Container format of the archive."
+          "enum": ["zip", "tar.gz", "7z", "none"],
+          "description": "Container format of the archive. 'none' is used for raw content files delivered as part of an archive bundle but not themselves containers (e.g. a standalone .mbox that Google Takeout splits out alongside the zip volumes when the mail export is too large to fit inside the zip)."
         }
       }
     },

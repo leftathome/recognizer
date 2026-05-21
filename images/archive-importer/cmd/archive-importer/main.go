@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/leftathome/recognizer/images/archive-importer/internal/ident"
@@ -34,45 +35,44 @@ func main() {
 	}
 }
 
+// run dispatches by file extension to the right handler.
+//
+// Google Takeout delivers a mix of file types: zip volumes plus
+// standalone content files for any single subtree too large to fit
+// inside the zips (most commonly a .mbox split out when Mail is huge).
+// Recognizer needs to handle whatever Google drops in the delivery
+// folder, so the same `ingest` verb accepts both.
 func run(cfg *Config) error {
-	id := cfg.IDOverride
-	if id == "" {
-		var err error
-		id, err = ident.Derive(cfg.ArchivePath)
-		if err != nil {
-			return fmt.Errorf("open archive: %w", err)
-		}
+	ext := strings.ToLower(filepath.Ext(cfg.ArchivePath))
+	switch ext {
+	case ".zip":
+		return runZipImport(cfg)
+	case ".mbox":
+		return runMboxImport(cfg)
+	default:
+		return fmt.Errorf("open archive: unsupported file extension %q (supported: .zip, .mbox)", ext)
 	}
+}
 
+// runZipImport unpacks a zip archive, runs the provider matcher over
+// the unpacked tree, and emits per-subtree + archive-import-complete
+// events. See spec 03 § 4.
+func runZipImport(cfg *Config) error {
+	id, err := deriveID(cfg)
+	if err != nil {
+		return err
+	}
 	unpackedDir := filepath.Join(cfg.DataRoot, "unpacked", id)
 	relayClient := relay.NewClient(cfg.RelayURL, 3, time.Second)
 
-	var priorManifest *manifest.Manifest
-	switch detectState(unpackedDir) {
-	case stateAbsent:
-		if err := os.MkdirAll(unpackedDir, 0755); err != nil {
-			return err
-		}
-	case stateManifestValid:
-		var err error
-		priorManifest, err = manifest.Read(filepath.Join(unpackedDir, manifest.ManifestFilename))
-		if err != nil {
-			return fmt.Errorf("read prior manifest: %w", err)
-		}
-	case stateManifestMissingOrInvalid:
-		if !cfg.Force {
-			return fmt.Errorf("partial state at %s; re-run with --force or remove the directory", unpackedDir)
-		}
-		os.RemoveAll(unpackedDir)
-		if err := os.MkdirAll(unpackedDir, 0755); err != nil {
-			return err
-		}
+	priorManifest, err := ensureStateAndManifest(cfg, unpackedDir)
+	if err != nil {
+		return err
 	}
 
-	lockPath := filepath.Join(unpackedDir, ".lock")
-	lk, err := lock.Acquire(lockPath)
+	lk, lockPath, err := acquireLock(unpackedDir, id)
 	if err != nil {
-		return fmt.Errorf("another import is in progress for %s: %w", id, err)
+		return err
 	}
 	defer lk.Release()
 	defer os.Remove(lockPath)
@@ -136,7 +136,6 @@ func run(cfg *Config) error {
 					ev := newEvent("archive-subtree-recognized", mt, outputPath, eid)
 					ev.Metadata["archive_format"] = "zip"
 					ev.Metadata["byte_size"] = byteSize
-					ev.Metadata["origin"] = "Google Takeout (fixture)"
 					if err := relayClient.Post(ev); err != nil {
 						return err
 					}
@@ -187,8 +186,147 @@ func run(cfg *Config) error {
 		})
 	}
 
+	return writeManifest(cfg, unpackedDir, id, sourcePath, hash, size, mtime, "zip",
+		provider.Name, startTime, recognized, unrecognized, events)
+}
+
+// runMboxImport handles a standalone .mbox file delivered alongside
+// (or instead of) Takeout zip volumes when Mail is too large to fit
+// inside a zip. No unpack; just hash, move into unpacked/<id>/, emit
+// the archive/google-takeout/mail event pointing at the file, and
+// write a single-entry manifest. Glovebox's mbox-importer (spec 09)
+// is the downstream consumer; it reads the file directly and handles
+// per-message parsing.
+func runMboxImport(cfg *Config) error {
+	id, err := deriveID(cfg)
+	if err != nil {
+		return err
+	}
+	unpackedDir := filepath.Join(cfg.DataRoot, "unpacked", id)
+	relayClient := relay.NewClient(cfg.RelayURL, 3, time.Second)
+
+	priorManifest, err := ensureStateAndManifest(cfg, unpackedDir)
+	if err != nil {
+		return err
+	}
+
+	lk, lockPath, err := acquireLock(unpackedDir, id)
+	if err != nil {
+		return err
+	}
+	defer lk.Release()
+	defer os.Remove(lockPath)
+
+	startTime := time.Now().UTC()
+
+	var sourcePath string
+	if priorManifest == nil {
+		sourcePath = filepath.Join(unpackedDir, filepath.Base(cfg.ArchivePath))
+		if err := os.Rename(cfg.ArchivePath, sourcePath); err != nil {
+			return fmt.Errorf("move source: %w", err)
+		}
+	} else {
+		sourcePath = filepath.Join(cfg.DataRoot, priorManifest.Source.MovedTo)
+	}
+
+	hash, size, mtime, err := hashSize(sourcePath)
+	if err != nil {
+		return fmt.Errorf("hash source: %w", err)
+	}
+
+	mt := "archive/google-takeout/mail"
+	eid := deriveEventID(id, mt, sourcePath)
+	var events []manifest.EventEmitted
+	if !cfg.DryRun {
+		ev := newEvent("archive-subtree-recognized", mt, sourcePath, eid)
+		ev.Metadata["archive_format"] = "none"
+		ev.Metadata["byte_size"] = size
+		if err := relayClient.Post(ev); err != nil {
+			return err
+		}
+		events = append(events, manifest.EventEmitted{
+			EventID: eid, EventType: ev.EventType, MediaType: mt, Timestamp: ev.Timestamp,
+		})
+	}
+	recognized := []manifest.SubtreeRecognized{{
+		MediaType: mt, OutputPath: sourcePath, ItemCount: nil, ByteSize: size, EventID: eid,
+	}}
+
+	if !cfg.DryRun {
+		completeEID := deriveEventID(id, "archive/google-takeout", unpackedDir)
+		ev := newEvent("archive-import-complete", "archive/google-takeout", unpackedDir, completeEID)
+		ev.Metadata["archive_format"] = "none"
+		ev.Metadata["byte_size"] = size
+		if err := relayClient.Post(ev); err != nil {
+			return err
+		}
+		events = append(events, manifest.EventEmitted{
+			EventID: completeEID, EventType: ev.EventType, MediaType: ev.MediaType, Timestamp: ev.Timestamp,
+		})
+	}
+
+	return writeManifest(cfg, unpackedDir, id, sourcePath, hash, size, mtime, "none",
+		"google-takeout", startTime, recognized, nil, events)
+}
+
+// --- shared helpers ---
+
+func deriveID(cfg *Config) (string, error) {
+	if cfg.IDOverride != "" {
+		return cfg.IDOverride, nil
+	}
+	id, err := ident.Derive(cfg.ArchivePath)
+	if err != nil {
+		return "", fmt.Errorf("open archive: %w", err)
+	}
+	return id, nil
+}
+
+func ensureStateAndManifest(cfg *Config, unpackedDir string) (*manifest.Manifest, error) {
+	switch detectState(unpackedDir) {
+	case stateAbsent:
+		if err := os.MkdirAll(unpackedDir, 0755); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	case stateManifestValid:
+		m, err := manifest.Read(filepath.Join(unpackedDir, manifest.ManifestFilename))
+		if err != nil {
+			return nil, fmt.Errorf("read prior manifest: %w", err)
+		}
+		return m, nil
+	case stateManifestMissingOrInvalid:
+		if !cfg.Force {
+			return nil, fmt.Errorf("partial state at %s; re-run with --force or remove the directory", unpackedDir)
+		}
+		os.RemoveAll(unpackedDir)
+		if err := os.MkdirAll(unpackedDir, 0755); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	return nil, nil
+}
+
+func acquireLock(unpackedDir, id string) (*lock.Lock, string, error) {
+	lockPath := filepath.Join(unpackedDir, ".lock")
+	lk, err := lock.Acquire(lockPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("another import is in progress for %s: %w", id, err)
+	}
+	return lk, lockPath, nil
+}
+
+func writeManifest(
+	cfg *Config,
+	unpackedDir, id, sourcePath, hash string,
+	size int64, mtime time.Time, archiveFormat string,
+	providerName string, startTime time.Time,
+	recognized []manifest.SubtreeRecognized,
+	unrecognized []manifest.SubtreeUnrecognized,
+	events []manifest.EventEmitted,
+) error {
 	endTime := time.Now().UTC()
-	providerName := provider.Name
 	movedToRel, err := filepath.Rel(cfg.DataRoot, sourcePath)
 	if err != nil {
 		return fmt.Errorf("manifest write: compute moved_to relpath: %w", err)
@@ -202,7 +340,7 @@ func run(cfg *Config) error {
 			SHA256:           hash,
 			SizeBytes:        size,
 			Mtime:            mtime.UTC().Format(time.RFC3339),
-			ArchiveFormat:    "zip",
+			ArchiveFormat:    archiveFormat,
 		},
 		Provider:             &providerName,
 		MatcherVersion:       matcherVersion,
