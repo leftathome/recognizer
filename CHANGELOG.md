@@ -7,6 +7,148 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-05-21
+
+### Changed
+
+- Bumped `opticalRipper.image.tag` to `2.23.2` (was `2.21.0`). 2.21.0
+  shipped MakeMKV 1.18.2 which is now past its 60-day "this version is
+  too old" rolling grace window; current ARM releases bundle a newer
+  MakeMKV that the rotating free beta key from forum.makemkv.com
+  re-activates.
+
+## [0.2.4] - 2026-05-21
+
+### Fixed
+
+- **archive-importer pod permission denied** writing to the data PVC.
+  Distroless base ships as `nonroot` (uid 65532), but the shared data
+  PVC is owned by uid 1000 (the optical-ripper init container is the
+  first writer). Pods failed with
+  `mkdir /data/incoming/archives/unpacked: permission denied`. Pod
+  now runs as uid:gid 1000:1000 with `fsGroup: 1000` so writes
+  succeed and any files created stay group-readable by ARM and the
+  scanner/relay containers.
+- **`scripts/run-job.sh` rejected Google Takeout filenames**. Google's
+  filenames carry uppercase `T`/`Z` from their timestamp format (e.g.
+  `takeout-20260411T180338Z-11-001.zip`), but Kubernetes object names
+  must be lowercase RFC 1123 subdomains. The script now normalizes the
+  stem (lowercase + non-alphanumeric → `-`).
+
+## [0.2.3] - 2026-05-21
+
+### Fixed
+
+- **optical-ripper's `NOTIFY_WEBHOOK` pointed at the wrong service**.
+  Was hardcoded to
+  `http://notification-relay.capture.svc.cluster.local:8080/event`
+  (wrong namespace, missing release prefix, wrong path). Switched to
+  the `recognizer.relayUrl` helper (D1 of spec 03 plan) so it renders
+  the actual in-cluster Service URL.
+
+## [0.2.2] - 2026-05-21
+
+### Fixed
+
+- **ARM bailed at startup on the permission check for `/out/video`**.
+  ARM's wrapper checks (without creating) that
+  `COMPLETED_PATH` / `AUDIO_COMPLETED_PATH` / `DATA_COMPLETED_PATH`
+  already exist and are writable; the data PVC was empty on first
+  use. The `chown-home` init container now `mkdir -p`s
+  `/out/{video,audio,data}` and chowns them to 1000:1000.
+
+## [0.2.1] - 2026-05-21
+
+### Fixed
+
+- **notification-relay crashed on arm64 nodes** with
+  `exec /usr/local/bin/python: exec format error`. Our kaniko CI is
+  amd64-only, so the Deployment now pins `nodeSelector:
+  kubernetes.io/arch=amd64`. Lift this once images ship multi-arch
+  manifests.
+
+## [0.2.0] - 2026-05-20
+
+The big feature release: the **archive-importer** workload arrives,
+implementing spec 03 end-to-end against Google Takeout archives.
+
+### Added
+
+- **`archive-importer` workload** (suspended `CronJob` template +
+  `ConfigMap` + `ServiceAccount`). Consumers promote the CronJob to a
+  one-off Job per archive via `scripts/run-job.sh <filename>.zip`.
+  Honors `archiveImporter.config.{dataRoot,relayUrl,includeUnrecognized,logLevel}`.
+- **Go binary** at `images/archive-importer/cmd/archive-importer` with
+  seven internal packages (ident, unpacker, matcher, manifest, relay,
+  lock, plus the matcher's Google Takeout provider). 60 unit + 5
+  end-to-end integration tests; deterministic event IDs (sha256 of
+  archive_id|media_type|output_path) so re-runs reuse the same IDs.
+- **JSON Schemas**: `notification-event.v1.1.schema.json` (additive
+  over v1.0; adds `archive-*` source/event_type values + `archive/*`
+  media-type pattern) and `archive-layout-manifest.v1.schema.json`
+  (the sidecar the importer writes next to the unpacked tree).
+- **CI jobs**: `test:go:archive-importer`, `vuln:go:archive-importer`,
+  `build:archive-importer` (kaniko). `vuln:go` is now parameterized
+  on `GO_MODULE_DIR` so future modules cost one extends-block.
+- **`recognizer.relayUrl` chart helper** for in-cluster default URLs.
+
+### Changed
+
+- `vuln:go` no longer hardcodes the document-scanner module path.
+
+## [0.1.5] - 2026-05-20
+
+### Fixed
+
+- **ARM bailed on the ownership check for `/etc/arm/config`**.
+  ConfigMap volume mounts are root-owned and read-only, so fsGroup
+  alone can't satisfy ARM's strict uid-1000 check. `arm-config` is
+  now a writable `emptyDir`; the `chown-home` init container copies
+  the ConfigMap contents into it and chowns to 1000:1000.
+
+## [0.1.4] - 2026-05-20
+
+### Fixed
+
+- **ARM container CrashLoopBackOff on `/home/arm` ownership**.
+  `emptyDir` mounts default to root:root; ARM's entrypoint refused to
+  start with
+  `[ERROR]: ARM does not have permissions to /home/arm using
+   1000:1000 ... Folder permissions--> 0:0`. Added
+  `pod.securityContext.fsGroup: 1000` and a `chown-home` init
+  container that chowns `/home/arm` + `/out` to 1000:1000.
+
+## [0.1.3] - 2026-05-20
+
+### Fixed
+
+- **optical-ripper image tag was non-existent**. `2.6.0` was never
+  published on Docker Hub (the 2.6.x line starts at 2.6.42). Bumped
+  to `2.21.0` (recent stable, multi-arch).
+- **CI `package:chart` job rejected all-digit short-SHA branch builds**
+  with `Error: Version segment starts with 0`. SemVer treats pure-digit
+  pre-release identifiers as numeric and forbids leading zeros, so a
+  short SHA like `04863033` blew up. Branch builds now use
+  `0.0.0-sha<short-sha>` (alphanumeric).
+
+## [0.1.2] - 2026-05-20
+
+### Fixed
+
+- **chart's ExternalSecrets referenced a `onepassword-connect`
+  ClusterSecretStore that doesn't exist in this homelab**. Switched
+  all three to `vault-backend` with paths under `eso/recognizer/*`.
+  Vault setup: `vault kv put secret/eso/recognizer/{makemkv,omdb,
+  notification-relay} <key>=<value>`.
+
+## [0.1.1] - 2026-05-19
+
+### Added
+
+- Chart README, `NOTES.txt`, and prerequisites header in `values.yaml`
+  documenting required cluster components (NFD, smarter-device-manager,
+  External Secrets Operator, StorageClass, image pull credentials).
+
 ## [0.1.0] - 2026-05-19
 
 The first release published to `registry.orac.local`. Supersedes the
