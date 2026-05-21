@@ -45,15 +45,15 @@ func (c *Client) Post(event any) error {
 		if err != nil {
 			lastErr = err
 		} else {
-			io.Copy(io.Discard, resp.Body)
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 			resp.Body.Close()
 			if resp.StatusCode < 500 {
 				if resp.StatusCode >= 400 {
-					return fmt.Errorf("relay returned %d", resp.StatusCode)
+					return fmt.Errorf("relay returned %d: %s (event body: %s)", resp.StatusCode, string(respBody), string(body))
 				}
 				return nil
 			}
-			lastErr = fmt.Errorf("relay returned %d", resp.StatusCode)
+			lastErr = fmt.Errorf("relay returned %d: %s", resp.StatusCode, string(respBody))
 		}
 		time.Sleep(c.backoff * time.Duration(1<<i))
 	}
