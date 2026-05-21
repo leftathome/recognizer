@@ -242,7 +242,7 @@ release:gitlab:
   # alpine base: has curl + ash; small. We bypass release-cli/glab entirely
   # because they hit the same cluster-CA TLS issue (gitops-gr30) and don't
   # expose an obvious skip-tls knob via GitLab's `release:` keyword.
-  image: alpine:3.21
+  image: alpine:3.23
   rules:
     - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+/
   variables:
