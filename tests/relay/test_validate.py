@@ -36,8 +36,11 @@ def test_missing_source_raises():
 
 def test_bad_media_type_raises():
     event = _load("valid_notification_optical.json")
+    # video/vhs misses the v1.0 enum AND the v1.1 ^archive/.+$ pattern,
+    # so v1.1's oneOf yields "is not valid under any of the given
+    # schemas" instead of v1.0's flat "is not one of [enum]".
     event["media_type"] = "video/vhs"
-    with pytest.raises(ValidationError, match="is not one of"):
+    with pytest.raises(ValidationError, match="is not valid under any of"):
         validate_event(event)
 
 
