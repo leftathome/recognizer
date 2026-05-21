@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-21
+
+### Added
+
+- **Standalone `.mbox` support in `archive-importer`**. Google Takeout
+  splits Mail into a separate `.mbox` file alongside the zip volumes
+  when the export is too large to fit inside a zip; the importer now
+  dispatches on file extension at `ingest` time. `.zip` keeps the
+  existing unpack-and-walk flow; `.mbox` hashes + moves the file into
+  `unpacked/<id>/`, emits a single `archive/google-takeout/mail` event
+  pointing at the moved file, and writes a one-entry manifest. Same
+  archive_id / idempotency semantics as zip imports. Glovebox's
+  mbox-importer (spec 09) is the downstream consumer for per-message
+  parsing.
+- **`archive_format: "none"`** in
+  `archive-layout-manifest.v1.schema.json` for raw-file deliveries
+  (additive enum extension; v1.0 documents written before this still
+  validate).
+- **33 new Takeout subtree matchers** covering Alerts, Android Device
+  Configuration Service, Assignments (Google Classroom), Blogger,
+  Chrome, Discover, Flow, Gemini, Google Account, Google Ads, Google
+  Business Profile, Google Feedback, Google Finance, Google Meet,
+  Google Pay, Google Play Books, Google Play Movies & TV, Google Play
+  Store, Google Product Surveys, Google Shopping, Google Store, Google
+  Wallet, Google Workspace Marketplace, Groups, Home App, Maps, Nest,
+  News, Profile, Saved, Search Contributions, Search Notifications,
+  Workspace Studio. Brings total recognized Takeout subtrees from 14
+  to 47.
+
+### Changed
+
+- **Matcher fingerprints now default to "any non-hidden entry"**.
+  Canonical Takeout subtree names are unambiguous once the provider
+  matched on `Takeout/`; the per-service `anyFileMatching(*.mbox)` /
+  `anySubdirOf(...)` checks were over-narrow and falsely dropping real
+  exports into `unrecognized`. Particular fix: YouTube no longer
+  requires `videos/` or `playlists/` -- exports with just
+  `subscriptions/` and `history/` now match.
+- **Single-pass SHA-256 for fresh imports.** Previously the importer
+  hashed each source twice (once for `archive_id` derivation, once
+  for `manifest.source.sha256`). `ident.HashFile` + `ident.DeriveID`
+  split the work cleanly and main.go reuses the single result.
+  Confirmed: a 12 GB Takeout mbox now ingests in ~10s of recognizer
+  work (plus whatever filesystem copy time the operator pays before
+  invoking the binary).
+
+### Fixed
+
+- **Unpacker rejected legitimate filenames with `..` mid-name**. The
+  redundant `strings.Contains(name, "..")` check refused entries like
+  `RackStation RS2423+ _ Synology Inc..html`. Dropped; `filepath.IsLocal`
+  already handles every real path-traversal case.
+- **`scripts/run-job.sh` accepted RFC 1123-invalid Job names** when
+  the source archive's filename had uppercase characters (Takeout
+  filenames carry uppercase `T` and `Z` from their ISO timestamp
+  format). The script now lowercases + sanitizes the stem.
+
 ## [0.2.5] - 2026-05-21
 
 ### Changed
