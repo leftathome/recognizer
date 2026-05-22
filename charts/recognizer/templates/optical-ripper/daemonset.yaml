@@ -45,6 +45,16 @@ spec:
         # copy its contents into an emptyDir we can chown.
         - name: chown-home
           image: busybox:stable
+          env:
+            # MakeMKV reads its registration key from
+            # /home/arm/.MakeMKV/settings.conf. /home/arm is an emptyDir
+            # that resets on every pod restart, so seed the file from
+            # the Vault-backed Secret here before ARM starts.
+            - name: KEY
+              valueFrom:
+                secretKeyRef:
+                  name: makemkv-license
+                  key: license-key
           command:
             - sh
             - -c
@@ -56,6 +66,9 @@ spec:
               # don't already exist (it doesn't mkdir them itself), and
               # it bails out before logging anything useful.
               mkdir -p /out/video /out/audio /out/data
+              mkdir -p /home/arm/.MakeMKV
+              printf 'app_Key = "%s"\n' "$KEY" > /home/arm/.MakeMKV/settings.conf
+              chmod 0600 /home/arm/.MakeMKV/settings.conf
               chown -R 1000:1000 /home/arm /out /etc/arm/config
               chmod 0775 /home/arm /out /etc/arm/config /out/video /out/audio /out/data
           securityContext:

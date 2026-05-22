@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-05-21
+
+### Changed
+
+- **`archive-importer` pod and container security contexts** now satisfy
+  the PSS `restricted` baseline. Pod sets `runAsNonRoot: true` and
+  `seccompProfile.type: RuntimeDefault`; container sets
+  `allowPrivilegeEscalation: false` and `capabilities.drop: ["ALL"]`.
+  Eliminates four admission warnings per Job pod.
+- **`optical-ripper` `chown-home` init container** now seeds
+  `/home/arm/.MakeMKV/settings.conf` with the registration key from the
+  `makemkv-license` Secret before ARM starts. The `arm-home` volume is
+  an `emptyDir`, so without this the key was wiped on every pod restart
+  and MakeMKV reverted to the "version too old" failure path.
+
+### Fixed
+
+- `images/archive-importer/scripts/run-job.sh` strips `.mbox` /
+  `.tar.gz` / `.7z` (not just `.zip`) before normalizing the stem,
+  drops `.` from the allowed character set entirely, and truncates the
+  normalized stem so the resulting Job name fits inside k8s's 63-char
+  label limit. The 12GB Google Mail mbox would otherwise fail Job
+  creation with a label-length validation error.
+
+## [0.3.3] - 2026-05-21
+
+### Changed
+
+- `archive-importer` relay client wraps 4xx responses with both the
+  response body and the event JSON payload to make schema validation
+  failures diagnosable from pod logs.
+
+## [0.3.2] - 2026-05-21
+
+### Fixed
+
+- `notification-relay/relay/validate.py` now loads
+  `notification-event.v1.1.schema.json`. Without this update the v1.1
+  events the importer emits (with the looser `media_type` pattern and
+  new `source` / `event_type` enums) were rejected with HTTP 400.
+- `archive-importer` event payloads include `node_name`, populated from
+  the Downward API via a `NODE_NAME` env on the CronJob template.
+  Required by both v1.0 and v1.1 schemas; earlier builds omitted it.
+
+## [0.3.1] - 2026-05-21
+
+### Fixed
+
+- `recognizer.relayUrl` helper renders `/event` (the only path the
+  notification-relay accepts) instead of `/notify`. Every importer
+  event was hitting 404 in-cluster before this fix.
+
 ## [0.3.0] - 2026-05-21
 
 ### Added
