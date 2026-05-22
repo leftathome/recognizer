@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Meta/Facebook export support in `archive-importer`** (archiver-bp9).
+  Detection looks for `personal_information/profile_information/profile_information.json`
+  with a `profile_v2` or `profile_information_v2` key at the archive
+  root (no wrapper dir, unlike Google Takeout). Depth-1 matchers cover
+  the 8 top-level dirs:
+  `ads_information`, `apps_and_websites_off_of_facebook`, `connections`,
+  `logged_information`, `personal_information`, `preferences`,
+  `security_and_login_information`, `your_facebook_activity`.
+  Verified against a real 332 MB Facebook export -- 8/8 recognized,
+  0 unrecognized.
+
+### Changed
+
+- **`archive-importer` is now multi-provider.** `runZipImport`
+  enumerates `GoogleTakeoutProvider` then `MetaProvider` and uses the
+  first that detects. Hardcoded `archive/google-takeout` /
+  `archive/google-takeout/unrecognized-subtree` media_types and the
+  literal `Takeout/` path prefix in the manifest's unrecognized subtree
+  records are replaced with `provider.UmbrellaMediaType`,
+  `provider.UnrecognizedSubtreeMediaType()`, and the
+  detect-result-relative path so Meta exports record bare
+  category-dir names instead of `Takeout/<category>`.
+
 ## [0.3.4] - 2026-05-21
 
 ### Changed

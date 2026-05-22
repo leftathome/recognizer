@@ -10,7 +10,8 @@ import (
 // archives and matches their per-service subtrees.
 func GoogleTakeoutProvider() Provider {
 	return Provider{
-		Name: "google-takeout",
+		Name:              "google-takeout",
+		UmbrellaMediaType: "archive/google-takeout",
 		Detect: func(rootPath string) (bool, string, error) {
 			tk := filepath.Join(rootPath, "Takeout")
 			fi, err := os.Stat(tk)

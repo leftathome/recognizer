@@ -109,13 +109,34 @@ func runZipImport(cfg *Config) error {
 		}
 	}
 
-	provider := matcher.GoogleTakeoutProvider()
-	detected, subtreeBase, err := provider.Detect(unpackedDir)
-	if err != nil {
-		return fmt.Errorf("matcher: provider detection: %w", err)
+	providers := []matcher.Provider{
+		matcher.GoogleTakeoutProvider(),
+		matcher.MetaProvider(),
+	}
+	var provider matcher.Provider
+	var subtreeBase string
+	detected := false
+	for _, p := range providers {
+		ok, base, err := p.Detect(unpackedDir)
+		if err != nil {
+			return fmt.Errorf("matcher: %s detect: %w", p.Name, err)
+		}
+		if ok {
+			provider = p
+			subtreeBase = base
+			detected = true
+			break
+		}
 	}
 	if !detected {
 		return fmt.Errorf("matcher: no provider matched in %s", unpackedDir)
+	}
+	// Manifest's unrecognized-subtree paths are relative to the
+	// unpacked dir. For Google Takeout this is "Takeout"; for Meta
+	// (no wrapper) this is ".".
+	subtreeRel, err := filepath.Rel(unpackedDir, subtreeBase)
+	if err != nil {
+		return fmt.Errorf("subtree base relative path: %w", err)
 	}
 
 	entries, err := os.ReadDir(subtreeBase)
@@ -166,7 +187,7 @@ func runZipImport(cfg *Config) error {
 			byteSize, _ := dirSize(dirPath)
 			emitted := false
 			if cfg.IncludeUnrecognized && !cfg.DryRun {
-				mt := "archive/google-takeout/unrecognized-subtree"
+				mt := provider.UnrecognizedSubtreeMediaType()
 				eid := deriveEventID(id, mt, outputPath)
 				ev := newEvent("archive-subtree-recognized", mt, outputPath, eid)
 				ev.Metadata["byte_size"] = byteSize
@@ -179,15 +200,15 @@ func runZipImport(cfg *Config) error {
 				emitted = true
 			}
 			unrecognized = append(unrecognized, manifest.SubtreeUnrecognized{
-				Path: filepath.Join("Takeout", dirName), FirstSeen: time.Now().UTC().Format(time.RFC3339),
+				Path: filepath.Join(subtreeRel, dirName), FirstSeen: time.Now().UTC().Format(time.RFC3339),
 				ByteSize: byteSize, EmittedEvent: emitted,
 			})
 		}
 	}
 
 	if !cfg.DryRun {
-		eid := deriveEventID(id, "archive/google-takeout", unpackedDir)
-		ev := newEvent("archive-import-complete", "archive/google-takeout", unpackedDir, eid)
+		eid := deriveEventID(id, provider.UmbrellaMediaType, unpackedDir)
+		ev := newEvent("archive-import-complete", provider.UmbrellaMediaType, unpackedDir, eid)
 		ev.Metadata["archive_format"] = "zip"
 		ev.Metadata["byte_size"] = size
 		if err := relayClient.Post(ev); err != nil {

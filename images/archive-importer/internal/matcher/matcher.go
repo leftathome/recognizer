@@ -16,6 +16,17 @@ type SubtreeMatcher interface {
 // Provider groups a top-level provider detector with its subtree matchers.
 type Provider struct {
 	Name     string
-	Detect   func(rootPath string) (matched bool, subtreeBase string, err error)
-	Subtrees []SubtreeMatcher
+	// UmbrellaMediaType is the provider's archive/<provider> media_type
+	// (e.g. "archive/google-takeout"). Used for the archive-import-complete
+	// event and, with a "/unrecognized-subtree" suffix, for unrecognized
+	// subtree events.
+	UmbrellaMediaType string
+	Detect            func(rootPath string) (matched bool, subtreeBase string, err error)
+	Subtrees          []SubtreeMatcher
+}
+
+// UnrecognizedSubtreeMediaType returns the media_type recorded against
+// subtrees that did not match any of the provider's SubtreeMatchers.
+func (p Provider) UnrecognizedSubtreeMediaType() string {
+	return p.UmbrellaMediaType + "/unrecognized-subtree"
 }
