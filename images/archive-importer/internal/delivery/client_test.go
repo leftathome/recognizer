@@ -1,0 +1,264 @@
+package delivery
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+)
+
+// fakeGlovebox is a stand-in for the real /v1/archives endpoint that
+// covers the subset of tus.io behavior our client exercises.
+type fakeGlovebox struct {
+	t             *testing.T
+	requireToken  string
+	createCalls   atomic.Int32
+	patchCalls    atomic.Int32
+	storedAtomic  atomic.Pointer[storedUpload]
+	// Trigger one PATCH 503 then succeed; used to exercise retry.
+	flapOnce atomic.Bool
+}
+
+type storedUpload struct {
+	id           string
+	length       int64
+	metadata     string
+	body         []byte
+	finalized    bool
+	sha256Header string
+}
+
+func (f *fakeGlovebox) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/archives", f.handleCreate)
+	mux.HandleFunc("/v1/archives/", f.handlePatchOrHead)
+	return mux
+}
+
+func (f *fakeGlovebox) handleCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !f.checkAuth(w, r) {
+		return
+	}
+	f.createCalls.Add(1)
+	length, _ := strconv.ParseInt(r.Header.Get("Upload-Length"), 10, 64)
+	id := "upload-1"
+	f.storedAtomic.Store(&storedUpload{
+		id:       id,
+		length:   length,
+		metadata: r.Header.Get("Upload-Metadata"),
+	})
+	w.Header().Set("Tus-Resumable", "1.0.0")
+	w.Header().Set("Location", "/v1/archives/"+id)
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (f *fakeGlovebox) handlePatchOrHead(w http.ResponseWriter, r *http.Request) {
+	if !f.checkAuth(w, r) {
+		return
+	}
+	st := f.storedAtomic.Load()
+	if st == nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	switch r.Method {
+	case "PATCH":
+		f.patchCalls.Add(1)
+		if f.flapOnce.CompareAndSwap(true, false) {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		offset, _ := strconv.ParseInt(r.Header.Get("Upload-Offset"), 10, 64)
+		if offset != int64(len(st.body)) {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		buf, _ := io.ReadAll(r.Body)
+		st.body = append(st.body, buf...)
+		w.Header().Set("Tus-Resumable", "1.0.0")
+		w.Header().Set("Upload-Offset", strconv.FormatInt(int64(len(st.body)), 10))
+		w.WriteHeader(http.StatusNoContent)
+		if int64(len(st.body)) == st.length {
+			st.finalized = true
+		}
+	case "HEAD":
+		w.Header().Set("Upload-Length", strconv.FormatInt(st.length, 10))
+		w.Header().Set("Upload-Offset", strconv.FormatInt(int64(len(st.body)), 10))
+		w.WriteHeader(http.StatusOK)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (f *fakeGlovebox) checkAuth(w http.ResponseWriter, r *http.Request) bool {
+	if h := r.Header.Get("Authorization"); h != "Bearer "+f.requireToken {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	if r.Header.Get("Tus-Resumable") != "1.0.0" && r.Method != "OPTIONS" {
+		w.WriteHeader(http.StatusPreconditionFailed)
+		return false
+	}
+	return true
+}
+
+func TestUpload_HappyPath_MultipleChunks(t *testing.T) {
+	fg := &fakeGlovebox{t: t, requireToken: "tok"}
+	srv := httptest.NewServer(fg.handler())
+	defer srv.Close()
+
+	// 80 KB body, chunk size 32 KB -> 3 PATCHes (32, 32, 16).
+	body := make([]byte, 80*1024)
+	for i := range body {
+		body[i] = byte(i % 251)
+	}
+	tmp := t.TempDir()
+	bodyPath := filepath.Join(tmp, "body.bin")
+	must(t, os.WriteFile(bodyPath, body, 0644))
+	sum := sha256.Sum256(body)
+
+	c := NewClient(srv.URL, "tok", "recognizer-smoke-test", nil)
+	c.ChunkSize = 32 * 1024
+
+	item := Item{
+		ArchiveID: "deadbeef-mail", ArchiveFilename: "f.mbox",
+		MediaType: "archive/mbox", MatcherID: "google-takeout/mail",
+		SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(body)),
+	}
+	loc, err := c.Upload(context.Background(), item, bodyPath)
+	if err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if !strings.Contains(loc, "/v1/archives/upload-1") {
+		t.Errorf("Location = %s", loc)
+	}
+	if fg.createCalls.Load() != 1 {
+		t.Errorf("createCalls = %d, want 1", fg.createCalls.Load())
+	}
+	if fg.patchCalls.Load() != 3 {
+		t.Errorf("patchCalls = %d, want 3", fg.patchCalls.Load())
+	}
+	st := fg.storedAtomic.Load()
+	if !st.finalized {
+		t.Error("server should have marked finalized at last PATCH")
+	}
+	if !equalBytes(st.body, body) {
+		t.Errorf("stored body length %d != sent %d", len(st.body), len(body))
+	}
+}
+
+func TestUpload_RetriesOn503(t *testing.T) {
+	fg := &fakeGlovebox{t: t, requireToken: "tok"}
+	fg.flapOnce.Store(true)
+	srv := httptest.NewServer(fg.handler())
+	defer srv.Close()
+
+	body := []byte("small body")
+	tmp := t.TempDir()
+	bodyPath := filepath.Join(tmp, "body.bin")
+	must(t, os.WriteFile(bodyPath, body, 0644))
+	sum := sha256.Sum256(body)
+
+	c := NewClient(srv.URL, "tok", "recognizer-smoke-test", nil)
+	c.ChunkSize = int64(len(body))
+	c.MaxRetries = 1
+	// Tests should not actually sleep. Skip backoff by setting MaxRetries
+	// just-high-enough; the backoff sleep is short on attempt=0 anyway.
+	_, err := c.Upload(context.Background(), Item{
+		ArchiveID: "x", ArchiveFilename: "f", MediaType: "archive/mbox",
+		MatcherID: "m", SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(body)),
+	}, bodyPath)
+	if err != nil {
+		t.Fatalf("Upload should succeed after one 503: %v", err)
+	}
+	if fg.patchCalls.Load() != 2 {
+		t.Errorf("patchCalls = %d, want 2 (one 503 + one success)", fg.patchCalls.Load())
+	}
+}
+
+func TestUpload_Replay303(t *testing.T) {
+	// Server immediately responds 303 to POST.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/archives", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/v1/archives/already")
+		w.WriteHeader(http.StatusSeeOther)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body := []byte("anything")
+	tmp := t.TempDir()
+	bodyPath := filepath.Join(tmp, "body.bin")
+	must(t, os.WriteFile(bodyPath, body, 0644))
+	sum := sha256.Sum256(body)
+
+	c := NewClient(srv.URL, "tok", "recognizer-smoke-test", nil)
+	_, err := c.Upload(context.Background(), Item{
+		ArchiveID: "x", ArchiveFilename: "f", MediaType: "archive/mbox",
+		MatcherID: "m", SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(body)),
+	}, bodyPath)
+
+	var replay *ReplayError
+	if !errors.As(err, &replay) {
+		t.Fatalf("expected *ReplayError, got %T %v", err, err)
+	}
+	if !strings.Contains(replay.Location, "/v1/archives/already") {
+		t.Errorf("replay Location = %s", replay.Location)
+	}
+}
+
+func TestUpload_4xxNonRetryable(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/archives", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":"unauthorized","message":"bad token"}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body := []byte("anything")
+	tmp := t.TempDir()
+	bodyPath := filepath.Join(tmp, "body.bin")
+	must(t, os.WriteFile(bodyPath, body, 0644))
+	sum := sha256.Sum256(body)
+
+	c := NewClient(srv.URL, "wrong", "recognizer-smoke-test", nil)
+	_, err := c.Upload(context.Background(), Item{
+		ArchiveID: "x", ArchiveFilename: "f", MediaType: "archive/mbox",
+		MatcherID: "m", SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(body)),
+	}, bodyPath)
+	if err == nil {
+		t.Fatal("expected error on 401")
+	}
+	var he *HTTPError
+	if !errors.As(err, &he) || he.Status != 401 {
+		t.Errorf("expected HTTPError 401, got %T %v", err, err)
+	}
+}
+
+func equalBytes(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

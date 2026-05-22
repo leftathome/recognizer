@@ -7,8 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-22
+
 ### Added
 
+- **Glovebox archive-delivery client** in `archive-importer`
+  (archiver-5od). After the matcher pass, recognized subtrees are
+  pushed to glovebox's tus.io `/v1/archives` endpoint per the team
+  handoff doc. Bearer-token auth from a Vault-projected Secret
+  (`secret/glovebox/ingest-tokens/<source-id>`). Per-subtree shape:
+  raw bytes for `archive/mbox`, gzipped tar for
+  `archive/google-takeout-subtree` and `archive/generic-tarball`
+  (Meta exports). 32 MiB PATCH chunks with bounded retry on 5xx/429.
+  Idempotent on re-run: manifest's new `deliveries[]` section tracks
+  what succeeded, and `Orchestrator.DeliverAll` short-circuits any
+  subtree whose `source_path` already has a `completed` record.
+  Schema bumps to v1.1 when `deliveries` is non-empty.
 - **Meta/Facebook export support in `archive-importer`** (archiver-bp9).
   Detection looks for `personal_information/profile_information/profile_information.json`
   with a `profile_v2` or `profile_information_v2` key at the archive
@@ -31,6 +45,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `provider.UnrecognizedSubtreeMediaType()`, and the
   detect-result-relative path so Meta exports record bare
   category-dir names instead of `Takeout/<category>`.
+
+### Chart
+
+- New `archiveImporter.gloveboxIngest.{enabled,url,sourceID,vault.*}`
+  Values. When `enabled: true`, the chart renders an ExternalSecret
+  targeting `glovebox/ingest-tokens/<sourceID>` plus the
+  `GLOVEBOX_INGEST_{URL,TOKEN,SOURCE_ID}` env on the archive-importer
+  CronJob. Default `false` keeps current behavior.
+
+### Operator note
+
+- The recognizer namespace must carry the label `name: openclaw-recognizer`
+  for glovebox's NetworkPolicy to admit traffic on port 9091. This is a
+  namespace-level label (separate from `kubernetes.io/metadata.name`)
+  and is set out-of-band: `kubectl label ns recognizer name=openclaw-recognizer`.
 
 ## [0.3.4] - 2026-05-21
 

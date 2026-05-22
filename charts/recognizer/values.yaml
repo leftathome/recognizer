@@ -162,3 +162,23 @@ archiveImporter:
     relayUrl: ""              # empty -> recognizer.relayUrl helper
     includeUnrecognized: false
     logLevel: info
+  # Glovebox archive-delivery (spec 13 / tus.io). When enabled, recognized
+  # subtrees push to glovebox's /v1/archives endpoint after the matcher
+  # pass and Delivery records land in the manifest.
+  #
+  # Operator prerequisite (one-shot, NOT chart-renderable):
+  #   kubectl label ns recognizer name=openclaw-recognizer
+  # Without that label glovebox's NetworkPolicy drops every packet at L4
+  # and the client sees TCP timeouts, not HTTP 401s.
+  gloveboxIngest:
+    enabled: false
+    url: "http://glovebox.glovebox.svc.cluster.local:9091"
+    # source_id under ^[a-z][a-z0-9]*(-[a-z0-9]+)*$, <=64 chars. Smoke-
+    # test uses "recognizer-smoke-test"; production uses whatever you
+    # negotiated with the glovebox operator.
+    sourceID: "recognizer-smoke-test"
+    vault:
+      refreshInterval: "1m"
+      secretStoreRef:
+        name: "vault-backend"
+        kind: "ClusterSecretStore"

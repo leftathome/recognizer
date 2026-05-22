@@ -69,6 +69,22 @@ spec:
                   valueFrom:
                     fieldRef:
                       fieldPath: spec.nodeName
+                {{- if .Values.archiveImporter.gloveboxIngest.enabled }}
+                # Glovebox archive-delivery (spec 13 / tus.io). When these
+                # three are set, recognized subtrees push to glovebox after
+                # the matcher pass. URL + sourceID come from Values; token
+                # is materialized by the ExternalSecret in
+                # externalsecret-glovebox-token.yaml.
+                - name: GLOVEBOX_INGEST_URL
+                  value: {{ .Values.archiveImporter.gloveboxIngest.url | quote }}
+                - name: GLOVEBOX_INGEST_SOURCE_ID
+                  value: {{ .Values.archiveImporter.gloveboxIngest.sourceID | quote }}
+                - name: GLOVEBOX_INGEST_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "recognizer.fullname" . }}-glovebox-ingest-token
+                      key: token
+                {{- end }}
               args: ["ingest", "/data/incoming/archives/raw/REPLACE-ME.zip"]
               volumeMounts:
                 - name: data

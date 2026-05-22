@@ -16,6 +16,12 @@ type Config struct {
 	IDOverride          string
 	DryRun              bool
 	LogLevel            string
+	// Glovebox archive-delivery (spec 13 / tus.io). When URL+Token+SourceID
+	// are all set, recognized subtrees are pushed to glovebox after the
+	// matcher pass and Delivery records are written into the manifest.
+	GloveboxIngestURL      string
+	GloveboxIngestToken    string
+	GloveboxIngestSourceID string
 }
 
 func parseFlags(args []string) (*Config, error) {
@@ -34,6 +40,9 @@ func parseFlags(args []string) (*Config, error) {
 	fs.StringVar(&c.IDOverride, "id", "", "Override the derived <id>")
 	fs.BoolVar(&c.DryRun, "dry-run", false, "Log everything, emit no events, write no files")
 	fs.StringVar(&c.LogLevel, "log-level", envOr("LOG_LEVEL", "info"), "debug / info / warn")
+	fs.StringVar(&c.GloveboxIngestURL, "glovebox-url", envOr("GLOVEBOX_INGEST_URL", ""), "Glovebox archive-delivery base URL (enables push)")
+	fs.StringVar(&c.GloveboxIngestToken, "glovebox-token", envOr("GLOVEBOX_INGEST_TOKEN", ""), "Glovebox bearer token")
+	fs.StringVar(&c.GloveboxIngestSourceID, "glovebox-source-id", envOr("GLOVEBOX_INGEST_SOURCE_ID", ""), "Glovebox-side source_id (e.g. recognizer-smoke-test)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return nil, err
 	}

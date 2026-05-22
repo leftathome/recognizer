@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leftathome/recognizer/images/archive-importer/internal/delivery"
 	"github.com/leftathome/recognizer/images/archive-importer/internal/ident"
 	"github.com/leftathome/recognizer/images/archive-importer/internal/lock"
 	"github.com/leftathome/recognizer/images/archive-importer/internal/manifest"
@@ -206,6 +208,17 @@ func runZipImport(cfg *Config) error {
 		}
 	}
 
+	var deliveries []manifest.Delivery
+	if !cfg.DryRun {
+		if orch := gloveboxOrchestrator(cfg, unpackedDir); orch != nil {
+			var prior []manifest.Delivery
+			if priorManifest != nil {
+				prior = priorManifest.Deliveries
+			}
+			deliveries = orch.DeliverAll(context.Background(), id, filepath.Base(cfg.ArchivePath), recognized, prior)
+		}
+	}
+
 	if !cfg.DryRun {
 		eid := deriveEventID(id, provider.UmbrellaMediaType, unpackedDir)
 		ev := newEvent("archive-import-complete", provider.UmbrellaMediaType, unpackedDir, eid)
@@ -220,7 +233,7 @@ func runZipImport(cfg *Config) error {
 	}
 
 	return writeManifest(cfg, unpackedDir, id, sourcePath, hash, size, mtime, "zip",
-		provider.Name, startTime, recognized, unrecognized, events)
+		provider.Name, startTime, recognized, unrecognized, events, deliveries)
 }
 
 // runMboxImport handles a standalone .mbox file delivered alongside
@@ -291,6 +304,17 @@ func runMboxImport(cfg *Config) error {
 		MediaType: mt, OutputPath: sourcePath, ItemCount: nil, ByteSize: size, EventID: eid,
 	}}
 
+	var deliveries []manifest.Delivery
+	if !cfg.DryRun {
+		if orch := gloveboxOrchestrator(cfg, unpackedDir); orch != nil {
+			var prior []manifest.Delivery
+			if priorManifest != nil {
+				prior = priorManifest.Deliveries
+			}
+			deliveries = orch.DeliverAll(context.Background(), id, filepath.Base(cfg.ArchivePath), recognized, prior)
+		}
+	}
+
 	if !cfg.DryRun {
 		completeEID := deriveEventID(id, "archive/google-takeout", unpackedDir)
 		ev := newEvent("archive-import-complete", "archive/google-takeout", unpackedDir, completeEID)
@@ -305,10 +329,23 @@ func runMboxImport(cfg *Config) error {
 	}
 
 	return writeManifest(cfg, unpackedDir, id, sourcePath, hash, size, mtime, "none",
-		"google-takeout", startTime, recognized, nil, events)
+		"google-takeout", startTime, recognized, nil, events, deliveries)
 }
 
 // --- shared helpers ---
+
+// gloveboxOrchestrator returns a configured delivery.Orchestrator, or
+// nil if any of the URL / Token / SourceID config triplet is missing.
+// nil means "skip the delivery step" -- old single-PVC operation mode.
+func gloveboxOrchestrator(cfg *Config, unpackedDir string) *delivery.Orchestrator {
+	if cfg.GloveboxIngestURL == "" || cfg.GloveboxIngestToken == "" || cfg.GloveboxIngestSourceID == "" {
+		return nil
+	}
+	return &delivery.Orchestrator{
+		Client:  delivery.NewClient(cfg.GloveboxIngestURL, cfg.GloveboxIngestToken, cfg.GloveboxIngestSourceID, nil),
+		TempDir: unpackedDir,
+	}
+}
 
 func ensureStateAndManifest(cfg *Config, unpackedDir string) (*manifest.Manifest, error) {
 	switch detectState(unpackedDir) {
@@ -353,14 +390,19 @@ func writeManifest(
 	recognized []manifest.SubtreeRecognized,
 	unrecognized []manifest.SubtreeUnrecognized,
 	events []manifest.EventEmitted,
+	deliveries []manifest.Delivery,
 ) error {
 	endTime := time.Now().UTC()
 	movedToRel, err := filepath.Rel(cfg.DataRoot, sourcePath)
 	if err != nil {
 		return fmt.Errorf("manifest write: compute moved_to relpath: %w", err)
 	}
+	schemaVersion := "1.0"
+	if len(deliveries) > 0 {
+		schemaVersion = "1.1"
+	}
 	m := &manifest.Manifest{
-		SchemaVersion: "1.0",
+		SchemaVersion: schemaVersion,
 		ArchiveID:     id,
 		Source: manifest.Source{
 			OriginalFilename: filepath.Base(cfg.ArchivePath),
@@ -376,6 +418,7 @@ func writeManifest(
 		SubtreesRecognized:   recognized,
 		SubtreesUnrecognized: unrecognized,
 		EventsEmitted:        events,
+		Deliveries:           deliveries,
 	}
 	if recognized == nil {
 		m.SubtreesRecognized = []manifest.SubtreeRecognized{}

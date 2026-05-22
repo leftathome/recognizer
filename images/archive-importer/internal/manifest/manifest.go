@@ -20,6 +20,40 @@ type Manifest struct {
 	SubtreesRecognized   []SubtreeRecognized   `json:"subtrees_recognized"`
 	SubtreesUnrecognized []SubtreeUnrecognized `json:"subtrees_unrecognized"`
 	EventsEmitted        []EventEmitted        `json:"events_emitted"`
+	// Deliveries records glovebox archive-delivery state per recognized
+	// subtree. Optional; omitted when no delivery transport is wired up.
+	// Schema bump to v1.1 when this field is non-empty.
+	Deliveries []Delivery `json:"deliveries,omitempty"`
+}
+
+// Delivery is a single push attempt to glovebox's archive ingest
+// endpoint (spec 13 / tus.io). One entry per recognized subtree.
+type Delivery struct {
+	// MatcherID identifies the recognizer-side subtree provenance,
+	// e.g. "google-takeout/mail" or "meta-facebook/ads-information".
+	MatcherID string `json:"matcher_id"`
+	// MediaType is what we sent on the wire (one of glovebox's allow-
+	// listed values: archive/mbox, archive/google-takeout-subtree,
+	// archive/generic-tarball, archive/imap-export).
+	MediaType string `json:"media_type"`
+	// SourcePath is the local file/dir we delivered (absolute under
+	// the unpacked dir). For raw deliveries it's a file; for tar
+	// deliveries it's the directory whose contents we tarballed.
+	SourcePath string `json:"source_path"`
+	// ArchiveID is the upload's archive_id metadata sent to glovebox
+	// (the idempotency key on their side).
+	ArchiveID string `json:"archive_id"`
+	// SHA256 + SizeBytes describe the upload body (for tar deliveries
+	// these are the tarball's hash/size, NOT the directory's).
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
+	// UploadURL is the Location glovebox assigned on POST.
+	UploadURL string `json:"upload_url,omitempty"`
+	// Status is one of "completed", "failed".
+	Status string `json:"status"`
+	// FailureReason carries the glovebox error code on Status=failed.
+	FailureReason string `json:"failure_reason,omitempty"`
+	DeliveredAt   string `json:"delivered_at"`
 }
 
 type Source struct {
