@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-05-23
+
+### Fixed
+
+- **`optical-ripper` ARM 2.23.2 crash on startup**: the chart's
+  `arm.yaml` ConfigMap now sets `INSTALLPATH: "/opt/arm/"`. ARM >=2.22
+  reads `INSTALLPATH` from the user config to LOCATE the template
+  config at `<INSTALLPATH>/setup/arm.yaml`, so the user yaml must
+  declare it even though the template itself ships with the same
+  default. Without this, every ARM webui start crashed with
+  `KeyError: 'INSTALLPATH'` (silent: the supervisord-style entrypoint
+  respawned without bumping the container's RestartCount). Renovate
+  bumped us from 2.21.0 to 2.23.2 and the chart never caught up.
+
 ## [0.4.2] - 2026-05-23
 
 ### Fixed

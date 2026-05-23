@@ -9,6 +9,12 @@ metadata:
     app.kubernetes.io/component: optical-ripper
 data:
   arm.yaml: |
+    # ARM >=2.22 reads INSTALLPATH from the user config to locate the
+    # template at <INSTALLPATH>/setup/arm.yaml. The template ships with
+    # its own INSTALLPATH default but the user config has to declare
+    # it first or the loader (arm/config/config.py:36) blows up with
+    # KeyError: 'INSTALLPATH'. Match the in-image install location.
+    INSTALLPATH: "/opt/arm/"
     RIPMETHOD: "mkv"
     EJECTENABLED: true
     JUSTMAKEISO: false
