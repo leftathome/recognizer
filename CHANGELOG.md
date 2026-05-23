@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-23
+
+### Fixed
+
+- `internal/delivery.Client.Upload` now does **HEAD-resume** instead
+  of restarting the upload from scratch on PATCH errors. A real 12 GB
+  mbox upload reached ~9.17 GB before a mid-chunk transport blip
+  truncated a PATCH body; our pre-fix retry resent from the chunk's
+  start while the server's `Upload-Offset` had already advanced past
+  it, returning `409 offset_mismatch` and exhausting the retry budget.
+  The new flow HEADs the upload on any PATCH error, re-syncs the
+  local offset to the server's authoritative value, and continues
+  from there. Same HEAD-resync runs on a `303 replay` POST response,
+  so an in-progress upload from a prior pod is picked up where it
+  left off rather than re-sent end-to-end. `ReplayError` type is
+  removed -- `Upload` is now a single yes-or-no boundary (success
+  when the server has the full bytes).
+
 ## [0.4.1] - 2026-05-23
 
 ### Fixed

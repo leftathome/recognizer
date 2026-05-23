@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -125,13 +124,6 @@ func (o *Orchestrator) Deliver(
 	uploadURL, err := o.Client.Upload(ctx, item, bodyPath)
 	d.UploadURL = uploadURL
 	if err != nil {
-		var replay *ReplayError
-		if errors.As(err, &replay) {
-			// 303 -- glovebox already has it. Treat as success.
-			d.Status = "completed"
-			d.UploadURL = replay.Location
-			return d
-		}
 		d.Status = "failed"
 		d.FailureReason = err.Error()
 		return d

@@ -57,35 +57,36 @@ func NewClient(baseURL, token, sourceID string, httpClient *http.Client) *Client
 	}
 }
 
-// ReplayError is returned by Upload when glovebox responds 303 to the
-// POST, signaling a same-archive_id-same-sha256 replay. Caller can
-// treat this as success.
-type ReplayError struct {
-	Location string
-}
-
-func (e *ReplayError) Error() string {
-	return "glovebox upload is a replay (303), location: " + e.Location
-}
-
-// Upload runs the full POST + PATCH-loop for one archive item against
-// bodyPath. On 201 it streams the body in ChunkSize-sized PATCHes.
-// On 303 it returns *ReplayError with the Location glovebox handed
-// back (caller treats this as success). Returns the upload URL on
-// completion.
+// Upload runs the full tus.io lifecycle for one archive item against
+// bodyPath: POST (or 303-replay resume), HEAD-resync on transient
+// failures, ChunkSize-sized PATCH loop, completion when server's
+// Upload-Offset equals item.SizeBytes. Returns the absolute upload URL
+// on success.
+//
+// On a 303 reply to POST (glovebox sees an in-flight or finalized
+// upload for the same archive_id+sha256+source_id), we HEAD the
+// existing upload to discover the server's current offset and resume
+// from there -- treating an already-complete upload as immediate
+// success and a partial upload as a resumable continuation.
+//
+// On a PATCH error (network drop, 5xx after retries, 409
+// offset_mismatch from a mid-chunk truncation), we HEAD the upload to
+// re-sync our local offset against the server's authoritative
+// Upload-Offset and continue from there.
 func (c *Client) Upload(ctx context.Context, item Item, bodyPath string) (uploadURL string, err error) {
 	if err := item.Validate(c.SourceID); err != nil {
 		return "", fmt.Errorf("delivery: item validate: %w", err)
 	}
 
-	loc, replay, err := c.create(ctx, item)
+	loc, offset, err := c.createOrResume(ctx, item)
 	if err != nil {
 		return "", err
 	}
-	if replay {
-		// Per the handoff doc, a 303 means glovebox already has this
-		// archive_id+sha256 from us. Caller treats as success.
-		return loc, &ReplayError{Location: loc}
+	if offset >= item.SizeBytes {
+		// Server already has the full upload (303 replay of a
+		// completed upload, or earlier-pod partial that filled all the
+		// way before glovebox sent us back here). Nothing to do.
+		return loc, nil
 	}
 
 	f, err := os.Open(bodyPath)
@@ -94,7 +95,6 @@ func (c *Client) Upload(ctx context.Context, item Item, bodyPath string) (upload
 	}
 	defer f.Close()
 
-	offset := int64(0)
 	for offset < item.SizeBytes {
 		end := offset + c.ChunkSize
 		if end > item.SizeBytes {
@@ -102,14 +102,65 @@ func (c *Client) Upload(ctx context.Context, item Item, bodyPath string) (upload
 		}
 		newOffset, err := c.patchChunk(ctx, loc, f, offset, end-offset)
 		if err != nil {
+			// Try a HEAD-resync before failing the whole upload. The
+			// server is the authoritative source of truth on how much
+			// it accepted; our local view may be stale after a
+			// transport blip or a 409 offset_mismatch.
+			srvOffset, hErr := c.head(ctx, loc)
+			if hErr == nil && srvOffset > offset {
+				offset = srvOffset
+				continue
+			}
 			return "", err
-		}
-		if newOffset != end {
-			return "", fmt.Errorf("delivery: server offset %d != expected %d", newOffset, end)
 		}
 		offset = newOffset
 	}
 	return loc, nil
+}
+
+// createOrResume POSTs a new upload (offset starts at 0) or, on a 303
+// replay, HEADs the existing upload to discover where to resume from.
+// Returned offset is the start position for the PATCH loop.
+func (c *Client) createOrResume(ctx context.Context, item Item) (uploadURL string, offset int64, err error) {
+	loc, replay, err := c.create(ctx, item)
+	if err != nil {
+		return "", 0, err
+	}
+	if !replay {
+		return loc, 0, nil
+	}
+	srvOffset, err := c.head(ctx, loc)
+	if err != nil {
+		return "", 0, err
+	}
+	return loc, srvOffset, nil
+}
+
+// head probes the upload state and returns the server's current
+// Upload-Offset. Used both after a 303 replay (to find where to
+// resume) and after a PATCH failure (to re-sync against the
+// authoritative server-side offset).
+func (c *Client) head(ctx context.Context, uploadURL string) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, "HEAD", uploadURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Tus-Resumable", "1.0.0")
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("HEAD %s: %w", uploadURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("HEAD %s: HTTP %d", uploadURL, resp.StatusCode)
+	}
+	off := resp.Header.Get("Upload-Offset")
+	n, perr := strconv.ParseInt(off, 10, 64)
+	if perr != nil {
+		return 0, fmt.Errorf("parse Upload-Offset %q: %w", off, perr)
+	}
+	return n, nil
 }
 
 // create POSTs to /v1/archives. Returns the absolute upload URL.

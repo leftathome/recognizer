@@ -191,34 +191,175 @@ func TestUpload_RetriesOn503(t *testing.T) {
 	}
 }
 
-func TestUpload_Replay303(t *testing.T) {
-	// Server immediately responds 303 to POST.
+func TestUpload_Replay303_AlreadyComplete(t *testing.T) {
+	// Server returns 303 on POST (replay) + 200 on HEAD with
+	// Upload-Offset == Upload-Length. Upload() should treat this as
+	// success without sending any PATCH.
+	body := []byte("anything")
+	patches := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/archives", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "/v1/archives/already")
 		w.WriteHeader(http.StatusSeeOther)
 	})
+	mux.HandleFunc("/v1/archives/already", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "HEAD":
+			w.Header().Set("Upload-Length", strconv.Itoa(len(body)))
+			w.Header().Set("Upload-Offset", strconv.Itoa(len(body)))
+			w.WriteHeader(http.StatusOK)
+		case "PATCH":
+			patches++
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	body := []byte("anything")
 	tmp := t.TempDir()
 	bodyPath := filepath.Join(tmp, "body.bin")
 	must(t, os.WriteFile(bodyPath, body, 0644))
 	sum := sha256.Sum256(body)
 
 	c := NewClient(srv.URL, "tok", "recognizer-smoke-test", nil)
+	loc, err := c.Upload(context.Background(), Item{
+		ArchiveID: "x", ArchiveFilename: "f", MediaType: "archive/mbox",
+		MatcherID: "m", SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(body)),
+	}, bodyPath)
+	if err != nil {
+		t.Fatalf("303-then-complete-HEAD should be success: %v", err)
+	}
+	if !strings.Contains(loc, "/v1/archives/already") {
+		t.Errorf("Location = %s", loc)
+	}
+	if patches != 0 {
+		t.Errorf("no PATCH should be sent when server already has full upload; got %d", patches)
+	}
+}
+
+func TestUpload_Replay303_ResumeFromPartial(t *testing.T) {
+	// Server returns 303 on POST (replay) + 200 on HEAD with
+	// Upload-Offset < Upload-Length. Upload() should resume PATCHing
+	// from the server's reported offset.
+	body := make([]byte, 100)
+	for i := range body {
+		body[i] = byte(i)
+	}
+	const partial = 40
+	var received int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/archives", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/v1/archives/partial")
+		w.WriteHeader(http.StatusSeeOther)
+	})
+	mux.HandleFunc("/v1/archives/partial", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "HEAD":
+			w.Header().Set("Upload-Length", strconv.Itoa(len(body)))
+			w.Header().Set("Upload-Offset", strconv.Itoa(partial+received))
+			w.WriteHeader(http.StatusOK)
+		case "PATCH":
+			off, _ := strconv.Atoi(r.Header.Get("Upload-Offset"))
+			if off != partial+received {
+				w.WriteHeader(http.StatusConflict)
+				return
+			}
+			n, _ := io.Copy(io.Discard, r.Body)
+			received += int(n)
+			w.Header().Set("Upload-Offset", strconv.Itoa(partial+received))
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tmp := t.TempDir()
+	bodyPath := filepath.Join(tmp, "body.bin")
+	must(t, os.WriteFile(bodyPath, body, 0644))
+	sum := sha256.Sum256(body)
+
+	c := NewClient(srv.URL, "tok", "recognizer-smoke-test", nil)
+	c.ChunkSize = 32
 	_, err := c.Upload(context.Background(), Item{
 		ArchiveID: "x", ArchiveFilename: "f", MediaType: "archive/mbox",
 		MatcherID: "m", SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(body)),
 	}, bodyPath)
-
-	var replay *ReplayError
-	if !errors.As(err, &replay) {
-		t.Fatalf("expected *ReplayError, got %T %v", err, err)
+	if err != nil {
+		t.Fatalf("resume should succeed: %v", err)
 	}
-	if !strings.Contains(replay.Location, "/v1/archives/already") {
-		t.Errorf("replay Location = %s", replay.Location)
+	if got := partial + received; got != len(body) {
+		t.Errorf("server got %d bytes, want %d (partial=%d, resumed=%d)", got, len(body), partial, received)
+	}
+}
+
+func TestUpload_HeadResyncAfterPatchError(t *testing.T) {
+	// Simulates: PATCH-1 transmits half its chunk, server's view of
+	// the upload advances by what it received, the connection drops
+	// (we synthesize this with a 500 after the partial read), our
+	// client retries from its local offset which is now stale, the
+	// retry fails 409 offset_mismatch, then our HEAD-resync catches
+	// the server's actual offset and continues.
+	body := make([]byte, 100)
+	for i := range body {
+		body[i] = byte(i % 251)
+	}
+	var serverOffset int64
+	var patchAttempts int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/archives", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/v1/archives/x")
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/v1/archives/x", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "HEAD":
+			w.Header().Set("Upload-Length", strconv.Itoa(len(body)))
+			w.Header().Set("Upload-Offset", strconv.FormatInt(serverOffset, 10))
+			w.WriteHeader(http.StatusOK)
+		case "PATCH":
+			patchAttempts++
+			off, _ := strconv.ParseInt(r.Header.Get("Upload-Offset"), 10, 64)
+			if patchAttempts == 1 {
+				// Read half the chunk, advance server offset by what we
+				// read, then drop the connection mid-stream by writing
+				// a 500 and not finishing.
+				half := make([]byte, 20)
+				io.ReadFull(r.Body, half)
+				serverOffset += 20
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if off != serverOffset {
+				w.Header().Set("Upload-Offset", strconv.FormatInt(serverOffset, 10))
+				w.WriteHeader(http.StatusConflict)
+				return
+			}
+			n, _ := io.Copy(io.Discard, r.Body)
+			serverOffset += n
+			w.Header().Set("Upload-Offset", strconv.FormatInt(serverOffset, 10))
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tmp := t.TempDir()
+	bodyPath := filepath.Join(tmp, "body.bin")
+	must(t, os.WriteFile(bodyPath, body, 0644))
+	sum := sha256.Sum256(body)
+
+	c := NewClient(srv.URL, "tok", "recognizer-smoke-test", nil)
+	c.ChunkSize = 40
+	c.MaxRetries = 0
+	_, err := c.Upload(context.Background(), Item{
+		ArchiveID: "x", ArchiveFilename: "f", MediaType: "archive/mbox",
+		MatcherID: "m", SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(body)),
+	}, bodyPath)
+	if err != nil {
+		t.Fatalf("HEAD-resync should recover from mid-chunk failure: %v", err)
+	}
+	if serverOffset != int64(len(body)) {
+		t.Errorf("server got %d bytes, want %d", serverOffset, len(body))
 	}
 }
 
