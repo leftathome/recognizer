@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-23
+
+### Fixed
+
+- `internal/delivery.TarSubtree` now writes plain `.tar` (no gzip
+  wrapper). Glovebox's finalize feeds the upload body straight into
+  `tar.NewReader` with no gzip detection; a real upload of a
+  `.tar.gz` payload errored at finalize with
+  `untar: tar read: archive/tar: invalid tar header`. The handoff doc
+  says "gzipped tarball" but the implementation expects plain tar;
+  filed as glovebox-m696. Until that disagreement is resolved we ship
+  plain `.tar` (the simpler interpretation, and saves a CPU pass
+  per delivery).
+
 ## [0.4.0] - 2026-05-22
 
 ### Added

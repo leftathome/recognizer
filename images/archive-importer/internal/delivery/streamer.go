@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -11,12 +10,21 @@ import (
 	"path/filepath"
 )
 
-// TarSubtree writes a gzipped tarball of dirPath (recursive) into a
-// freshly-created temp file under tmpDir, returning the temp file's
-// path, body sha256, and body size. Callers MUST os.Remove the path
-// when done; the file is deliberately not auto-deleted because the
-// caller streams it to glovebox via tus PATCH and only knows it's safe
-// to remove after the upload succeeds.
+// TarSubtree writes a plain (non-gzipped) tarball of dirPath
+// (recursive) into a freshly-created temp file under tmpDir, returning
+// the temp file's path, body sha256, and body size. Callers MUST
+// os.Remove the path when done; the file is deliberately not auto-
+// deleted because the caller streams it to glovebox via tus PATCH and
+// only knows it's safe to remove after the upload succeeds.
+//
+// NOTE on format: glovebox's docs/handoffs/recognizer-archive-delivery.md
+// §3b calls these "gzipped tarball" but the actual finalize code
+// (internal/ingest/archives/finalize.go) feeds the body straight into
+// tar.NewReader with no gzip wrapper. Real upload of a .tar.gz
+// returned `untar: tar read: archive/tar: invalid tar header` at
+// finalize on 2026-05-23. Filed as glovebox-m696. Until that's
+// resolved we ship plain .tar (the simpler interpretation; CPU win
+// per delivery vs the gzip pass anyway).
 //
 // The tarball includes:
 //   - Regular files (mode preserved to the low 9 bits).
@@ -30,7 +38,7 @@ import (
 // contents inside <archive_id>/extracted/, not nested under the
 // original dir's name). This matches spec 13 §4.7 expectations.
 func TarSubtree(dirPath, tmpDir string) (path, sha256hex string, size int64, err error) {
-	tmpFile, err := os.CreateTemp(tmpDir, "subtree-*.tar.gz")
+	tmpFile, err := os.CreateTemp(tmpDir, "subtree-*.tar")
 	if err != nil {
 		return "", "", 0, fmt.Errorf("create temp: %w", err)
 	}
@@ -49,8 +57,7 @@ func TarSubtree(dirPath, tmpDir string) (path, sha256hex string, size int64, err
 	// reads back from the temp file.
 	mw := io.MultiWriter(tmpFile, hasher, counter)
 
-	gz := gzip.NewWriter(mw)
-	tw := tar.NewWriter(gz)
+	tw := tar.NewWriter(mw)
 
 	walkErr := filepath.Walk(dirPath, func(p string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
@@ -101,9 +108,6 @@ func TarSubtree(dirPath, tmpDir string) (path, sha256hex string, size int64, err
 	}
 	if err := tw.Close(); err != nil {
 		return "", "", 0, fmt.Errorf("close tar: %w", err)
-	}
-	if err := gz.Close(); err != nil {
-		return "", "", 0, fmt.Errorf("close gzip: %w", err)
 	}
 	if err := tmpFile.Sync(); err != nil {
 		return "", "", 0, fmt.Errorf("sync temp: %w", err)

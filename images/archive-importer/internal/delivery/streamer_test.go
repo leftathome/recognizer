@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -94,12 +93,7 @@ func listTar(t *testing.T, path string) []string {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
+	tr := tar.NewReader(f)
 	var names []string
 	for {
 		h, err := tr.Next()
