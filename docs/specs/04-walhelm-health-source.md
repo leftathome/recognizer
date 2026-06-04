@@ -146,7 +146,11 @@ Helm (`charts/recognizer`): a `walhelmSource` values block (enabled, subjectPrin
 - **End-to-end (fixture)**: fake client → fetch → tree → real `delivery.Orchestrator` → fake Glovebox server; assert the POST carried `media_type=archive/walhelm-export` + `acq_*` + `data_subject` + `audience`, and the tar body contains the expected per-item files.
 - `go test ./... -race`, `go vet` clean.
 
-## 11. Open Decisions (for review)
+## 11. Decisions (resolved 2026-06-03)
+
+Decision **#6 (record-download)**: **metadata-only in v0.1**; `records/<id>.json` only. The zip (`DownloadRecord` -> `records/<id>.zip`) is a v0.1.1 fast-follow. Decisions **#1-#5**: the **proposed defaults are adopted** (new `cmd/walhelm-fetch` in the `archive-importer` module reusing `internal/delivery`; enumerate message folders via `GetFolders`; JSON message files; one-shot CronJob suspended by default; session-expiry exit-and-alert). They remain recorded below as the rationale.
+
+### Open-decision rationale (for reference)
 1. **Command home**: a new `cmd/walhelm-fetch` in the `archive-importer` module reusing `internal/delivery` (proposed -- lightest, shares the proven client), vs a separate `images/walhelm-fetch` module/image. Proposed: same module, new command, separate image build target.
 2. **Folder enumeration for messages**: fetch all folders via `GetFolders` and pull each, vs a fixed default (inbox/conversations). Proposed: enumerate via `GetFolders`, fetch the conversation folders, skip empties.
 3. **Message file format**: JSON (faithful to walhelm-go structs, proposed) vs `.eml`/RFC822 rendering (closer to the mbox path, enables the email enrichers). Proposed: JSON for v0.1; revisit `.eml` if the enrichers add value for messages.
