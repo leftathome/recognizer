@@ -66,11 +66,12 @@ Context (verified): `Item` (metadata.go:14-..), `AllowedMediaTypes` (4 entries),
 
 > **Step 0 — resolve the walhelm-go dependency FIRST (do before any code/build).** walhelm-go's module path is `github.com/leftathome/walhelm-go` but its only remote is `https://gitlab.orac.local/steve/walhelm-go.git` (vanity-path/host mismatch). Plain `go get` will NOT resolve it. Use the `insteadOf` rewrite (committable; works locally + in CI):
 > ```sh
-> go env -w GOPRIVATE=gitlab.orac.local
+> # GOPRIVATE must match the MODULE PATH (github.com/leftathome/...), NOT the host — verified 2026-06-03.
+> export GOPRIVATE='github.com/leftathome/*'
 > git config --global url."https://gitlab.orac.local/steve/walhelm-go.git".insteadOf "https://github.com/leftathome/walhelm-go"
-> cd images/archive-importer && go get github.com/leftathome/walhelm-go@<pin-a-commit>
+> cd images/archive-importer && go get github.com/leftathome/walhelm-go@v0.1.0-rc.1   # pinned tag, verified to resolve+build
 > ```
-> This writes a normal `require` (NO `replace` committed). Verify `go build ./...` resolves it.
+> This writes a normal `require` (NO `replace` committed). **Verified working in this worktree** (downloads from gitlab via insteadOf, skips proxy/sumdb because GOPRIVATE matches the module path; v0.1.0-rc.1 is a real tag). Verify `go build ./...` resolves it. (Setting `GOPRIVATE=gitlab.orac.local` — the host — does NOT work: go keys proxy/sumdb decisions off the module path, so it tried the public sumdb and failed.)
 > - **Fallback if the rewrite can't be made to work in this environment:** add a TEMPORARY local replace with an ABSOLUTE path — `replace github.com/leftathome/walhelm-go => /mnt/c/Users/steve/Code/walhelm-go` — to build/test locally, but DO NOT COMMIT the replace (it's machine-specific and breaks kaniko, whose build context is the recognizer repo, not `/mnt/c`). Note clearly which path you took.
 > - Pin a specific commit. CI (Task 10) replicates the GOPRIVATE + `insteadOf` (with a CI token in the URL).
 > - If you genuinely cannot resolve the module, STOP and report (don't fake the types).
