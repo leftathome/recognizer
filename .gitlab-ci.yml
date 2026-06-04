@@ -135,6 +135,11 @@ test:go:archive-importer:
 
 vuln:go:archive-importer:
   extends: vuln:go
+  # WARNING: do NOT add a before_script here. A job-level before_script
+  # REPLACES the inherited vuln:go one (GitLab CI does not merge them), which
+  # would silently drop the *go_private_dep anchor. If you need extra steps,
+  # use !reference [vuln:go, before_script] as the first entry, exactly as
+  # test:go:archive-importer does.
   variables:
     GO_MODULE_DIR: images/archive-importer
 
