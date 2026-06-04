@@ -113,15 +113,15 @@ Context (verified): `Item` (metadata.go:14-..), `AllowedMediaTypes` (4 entries),
 
 ### Task 6: Fetch orchestration
 **Files:** `internal/walhelm/fetch.go`, `fetch_test.go`.
-- [ ] **Step 1 (TDD):** `Fetch(ctx, cli WalhelmClient, st State) (treeDir string, newState State, items int, err error)`:
+- [x] **Step 1 (TDD):** `Fetch(ctx, cli WalhelmClient, st State) (treeDir string, newState State, items int, err error)`:
   - enumerate folders via `GetFolders`; for each conversation folder, `ListConversations(folderID, st.MessagesSince)` then `GetConversation` per summary.
   - `ListLabPanels(st.LabsSince)`, `ListRecords(st.RecordsSince)`.
   - `WriteTree` into a fresh temp dir.
-  - compute `newState` from the max timestamp seen per type (or `time.Now()` at fetch start — pick the conservative one: fetch-start time, to avoid missing items written during the run; document the choice).
-  - return `items==0` when nothing new (caller skips delivery).
-  Test with a fake client: since-filtering is honored (fake asserts the `since` it received), tree written, `items` correct, empty fetch → items 0 + no tree.
-- [ ] **Step 2-4:** fail → implement → pass; `go vet`; `go test -race`.
-- [ ] **Step 5:** commit `feat(walhelm): fetch loop (folders->conversations, labs, records) -> tree`.
+  - cursor choice: `time.Now().UTC()` captured at fetch START (documented in fetch.go) — conservative/at-least-once, never skips items created mid-run.
+  - return `items==0` when nothing new (caller skips delivery); on empty fetch newState == input st (cursors do NOT advance).
+  Test with a fake client: since-filtering is honored (fake records the `since` it received), tree written, `items` correct, empty fetch → items 0 + no tree, error path (ListLabPanels err) → items 0 + no tree + wrapped err.
+- [x] **Step 2-4:** fail → implement → pass; `go vet`; `go test -race`.
+- [x] **Step 5:** commit `feat(walhelm): fetch loop (folders->conversations, labs, records) -> tree`.
 
 ---
 
