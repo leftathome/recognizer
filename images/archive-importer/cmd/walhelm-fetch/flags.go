@@ -45,7 +45,7 @@ func parseFlags(args []string) (*Config, error) {
 	fs.StringVar(&c.LogLevel, "log-level", envOr("LOG_LEVEL", "info"), "debug / info / warn")
 	if err := fs.Parse(args); err != nil {
 		// flag parse errors are configuration errors (exit 2).
-		return nil, &errConfig{msg: err.Error()}
+		return nil, configErrorf("%s", err)
 	}
 
 	var missing []string

@@ -38,12 +38,11 @@ type fakeTusServer struct {
 	// TestRunOnce_UploadError_NoStateSave to lock in the at-least-once guarantee.
 	forceFailCreate bool
 
-	mu          sync.Mutex
-	postCalls   int
-	metadata    string // raw Upload-Metadata header captured at POST
-	uploadLen   int64
-	body        []byte // accumulated PATCH bytes
-	location    string
+	mu        sync.Mutex
+	postCalls int
+	metadata  string // raw Upload-Metadata header captured at POST
+	uploadLen int64
+	body      []byte // accumulated PATCH bytes
 }
 
 func (s *fakeTusServer) handler() http.Handler {
@@ -73,9 +72,14 @@ func (s *fakeTusServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if !s.checkPreconditions(w, r) {
 		return
 	}
+
 	s.mu.Lock()
 	s.postCalls++
 	fail := s.forceFailCreate
+	if !fail {
+		s.metadata = r.Header.Get("Upload-Metadata")
+		s.uploadLen, _ = strconv.ParseInt(r.Header.Get("Upload-Length"), 10, 64)
+	}
 	s.mu.Unlock()
 
 	if fail {
@@ -83,13 +87,7 @@ func (s *fakeTusServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	s.metadata = r.Header.Get("Upload-Metadata")
-	s.uploadLen, _ = strconv.ParseInt(r.Header.Get("Upload-Length"), 10, 64)
-	s.location = "/v1/archives/walhelm-upload-1"
-	loc := s.location
-	s.mu.Unlock()
-
+	const loc = "/v1/archives/walhelm-upload-1"
 	w.Header().Set("Tus-Resumable", "1.0.0")
 	w.Header().Set("Location", loc)
 	w.WriteHeader(http.StatusCreated)
