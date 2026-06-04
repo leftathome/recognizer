@@ -102,6 +102,155 @@ func TestValidate_RequiresSourceID(t *testing.T) {
 	}
 }
 
+// TestUploadMetadataHeader_WalhelmExport verifies that an archive/walhelm-export
+// Item emits all spec-15 provenance keys in addition to the standard keys.
+func TestUploadMetadataHeader_WalhelmExport(t *testing.T) {
+	it := Item{
+		ArchiveID:       "walhelm-001",
+		ArchiveFilename: "export.tar.gz",
+		MediaType:       "archive/walhelm-export",
+		MatcherID:       "walhelm/health",
+		SHA256:          strings.Repeat("c", 64),
+		SizeBytes:       9999,
+		AcqProvider:     "kp-wa",
+		AcqAccountID:    "leftathome",
+		AcqAuthMethod:   "browser_session",
+		DataSubject:     "walhelm:9f2a",
+		Audience:        []string{"subject", "guardians"},
+	}
+	hdr := it.UploadMetadataHeader("recognizer-smoke-test")
+	got := parseMetadataHeader(t, hdr)
+
+	wantProvenance := map[string]string{
+		"acq_provider":    "kp-wa",
+		"acq_account_id":  "leftathome",
+		"acq_auth_method": "browser_session",
+		"data_subject":    "walhelm:9f2a",
+		"audience":        "subject,guardians",
+	}
+	for k, v := range wantProvenance {
+		if got[k] != v {
+			t.Errorf("key %q = %q, want %q", k, got[k], v)
+		}
+	}
+	// Standard keys must still be present.
+	if got["archive_id"] != "walhelm-001" {
+		t.Errorf("archive_id = %q, want %q", got["archive_id"], "walhelm-001")
+	}
+	if got["media_type"] != "archive/walhelm-export" {
+		t.Errorf("media_type = %q, want %q", got["media_type"], "archive/walhelm-export")
+	}
+}
+
+// TestUploadMetadataHeader_BackwardCompat_Mbox verifies that an archive/mbox
+// Item with spec-15 fields left zero produces a header byte-identical to what
+// was produced before spec-15 was introduced (no acq_*/data_subject/audience
+// keys present).
+func TestUploadMetadataHeader_BackwardCompat_Mbox(t *testing.T) {
+	it := Item{
+		ArchiveID:       "abc-1",
+		ArchiveFilename: "f.mbox",
+		MediaType:       "archive/mbox",
+		MatcherID:       "google-takeout/mail",
+		SHA256:          strings.Repeat("a", 64),
+		SizeBytes:       1234,
+	}
+	hdr := it.UploadMetadataHeader("recognizer-smoke-test")
+	got := parseMetadataHeader(t, hdr)
+
+	absent := []string{"acq_provider", "acq_account_id", "acq_auth_method", "data_subject", "audience"}
+	for _, k := range absent {
+		if _, ok := got[k]; ok {
+			t.Errorf("key %q must be absent for archive/mbox with zero spec-15 fields, but it is present", k)
+		}
+	}
+	// Reconstruct expected header byte-for-byte to catch any reordering.
+	wantHdr := "archive_id " + b64("abc-1") + "," +
+		"archive_filename " + b64("f.mbox") + "," +
+		"media_type " + b64("archive/mbox") + "," +
+		"matcher_id " + b64("google-takeout/mail") + "," +
+		"provider " + b64("recognizer-smoke-test") + "," +
+		"sha256 " + b64(strings.Repeat("a", 64)) + "," +
+		"size_bytes " + b64("1234")
+	if hdr != wantHdr {
+		t.Errorf("mbox header changed (backward-compat broken):\ngot:  %s\nwant: %s", hdr, wantHdr)
+	}
+}
+
+// TestValidate_WalhelmExport_RequiresProvenanceFields verifies that
+// archive/walhelm-export Items are rejected when spec-15 provenance
+// fields are missing, and accepted when all are present.
+func TestValidate_WalhelmExport_RequiresProvenanceFields(t *testing.T) {
+	good := Item{
+		ArchiveID:       "w-1",
+		ArchiveFilename:  "export.tar.gz",
+		MediaType:       "archive/walhelm-export",
+		MatcherID:       "walhelm/health",
+		SHA256:          strings.Repeat("d", 64),
+		SizeBytes:       1,
+		AcqProvider:     "kp-wa",
+		AcqAccountID:    "leftathome",
+		AcqAuthMethod:   "browser_session",
+		DataSubject:     "walhelm:9f2a",
+		Audience:        []string{"subject"},
+	}
+	if err := good.Validate("recognizer-smoke-test"); err != nil {
+		t.Fatalf("complete walhelm-export item should validate: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		mut  func(*Item)
+		want string
+	}{
+		{"missing AcqProvider", func(i *Item) { i.AcqProvider = "" }, "AcqProvider"},
+		{"missing AcqAccountID", func(i *Item) { i.AcqAccountID = "" }, "AcqAccountID"},
+		{"missing AcqAuthMethod", func(i *Item) { i.AcqAuthMethod = "" }, "AcqAuthMethod"},
+		{"missing DataSubject", func(i *Item) { i.DataSubject = "" }, "DataSubject"},
+		{"empty Audience", func(i *Item) { i.Audience = nil }, "Audience"},
+		{"empty Audience slice", func(i *Item) { i.Audience = []string{} }, "Audience"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			it := good
+			tc.mut(&it)
+			err := it.Validate("recognizer-smoke-test")
+			if err == nil {
+				t.Fatalf("expected error mentioning %q", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidate_NonWalhelm_ProvenanceFieldsOptional verifies that mbox and
+// other existing media types do not require spec-15 provenance fields.
+func TestValidate_NonWalhelm_ProvenanceFieldsOptional(t *testing.T) {
+	mediaTypes := []string{
+		"archive/mbox",
+		"archive/imap-export",
+		"archive/generic-tarball",
+	}
+	for _, mt := range mediaTypes {
+		t.Run(mt, func(t *testing.T) {
+			it := Item{
+				ArchiveID:       "x",
+				ArchiveFilename: "f",
+				MediaType:       mt,
+				MatcherID:       "x",
+				SHA256:          strings.Repeat("a", 64),
+				SizeBytes:       1,
+				// spec-15 fields intentionally left zero.
+			}
+			if err := it.Validate("recognizer-smoke-test"); err != nil {
+				t.Errorf("media type %q with zero spec-15 fields should not error: %v", mt, err)
+			}
+		})
+	}
+}
+
 // parseMetadataHeader decodes "key BASE64(value),key BASE64(value)..."
 // into a map. Used by tests to assert that the header round-trips.
 func parseMetadataHeader(t *testing.T, hdr string) map[string]string {
