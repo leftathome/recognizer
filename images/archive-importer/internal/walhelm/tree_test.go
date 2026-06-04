@@ -2,6 +2,8 @@ package walhelmsrc
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -123,7 +125,7 @@ func TestWriteTree_EmptyInputs(t *testing.T) {
 	// No subdirectories should be created.
 	for _, sub := range []string{"messages", "labs", "records"} {
 		p := filepath.Join(root, sub)
-		if _, err := os.Stat(p); !os.IsNotExist(err) {
+		if _, err := os.Stat(p); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("subdir %q should not exist, but stat returned: %v", sub, err)
 		}
 	}

@@ -36,7 +36,7 @@ func newRealClient(c *walhelm.Client) WalhelmClient {
 // sinceOpts builds the upstream ListOption slice, applying WithSince only when
 // a non-zero time is supplied.
 func sinceOpts(since time.Time) []walhelm.ListOption {
-	opts := []walhelm.ListOption{}
+	var opts []walhelm.ListOption
 	if !since.IsZero() {
 		opts = append(opts, walhelm.WithSince(since))
 	}

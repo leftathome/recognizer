@@ -50,15 +50,8 @@ func TestLoadState_AbsentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState with absent file: expected nil error, got %v", err)
 	}
-	var zero State
-	if !got.MessagesSince.Equal(zero.MessagesSince) {
-		t.Errorf("MessagesSince: got %v, want zero", got.MessagesSince)
-	}
-	if !got.LabsSince.Equal(zero.LabsSince) {
-		t.Errorf("LabsSince: got %v, want zero", got.LabsSince)
-	}
-	if !got.RecordsSince.Equal(zero.RecordsSince) {
-		t.Errorf("RecordsSince: got %v, want zero", got.RecordsSince)
+	if got != (State{}) {
+		t.Errorf("LoadState = %+v, want zero State", got)
 	}
 }
 
@@ -76,15 +69,8 @@ func TestLoadState_CorruptFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState with corrupt file: expected nil error, got %v", err)
 	}
-	var zero State
-	if !got.MessagesSince.Equal(zero.MessagesSince) {
-		t.Errorf("MessagesSince: got %v, want zero", got.MessagesSince)
-	}
-	if !got.LabsSince.Equal(zero.LabsSince) {
-		t.Errorf("LabsSince: got %v, want zero", got.LabsSince)
-	}
-	if !got.RecordsSince.Equal(zero.RecordsSince) {
-		t.Errorf("RecordsSince: got %v, want zero", got.RecordsSince)
+	if got != (State{}) {
+		t.Errorf("LoadState = %+v, want zero State", got)
 	}
 }
 
