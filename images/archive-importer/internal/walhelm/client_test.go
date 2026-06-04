@@ -11,6 +11,20 @@ import (
 // fakeWalhelmClient is a test double implementing WalhelmClient with canned data.
 // It exists so downstream SP3 tasks (session/tree/state/fetch) can be driven
 // without a live walhelm-go client.
+//
+// Conversation data can be supplied two ways:
+//   - the legacy flat fields (conversations / conversation) used by the basic
+//     canned-data test, and
+//   - the per-folder maps (convsByFolder / convByID) used by Fetch tests that
+//     need distinct summaries per folder and a detail lookup keyed by ID.
+//
+// When a *ByFolder/*ByID map is non-nil for the relevant key it takes
+// precedence over the flat field.
+//
+// The since* fields record the most recent since value each List* method was
+// called with, so tests can assert that cursors are propagated correctly.
+// The *Err fields, when set, are returned by the corresponding method to
+// exercise error-propagation paths.
 type fakeWalhelmClient struct {
 	folders       []walhelm.Folder
 	conversations []walhelm.ConversationSummary
@@ -18,25 +32,65 @@ type fakeWalhelmClient struct {
 	labPanels     []walhelm.LabPanel
 	records       []walhelm.MedicalRecord
 	acctID        string
+
+	// Per-folder / per-id overrides for richer Fetch scenarios.
+	convsByFolder map[string][]walhelm.ConversationSummary
+	convByID      map[string]*walhelm.Conversation
+
+	// Recorded since values from the most recent List* call of each kind.
+	sinceConversations time.Time
+	sinceLabs          time.Time
+	sinceRecords       time.Time
+
+	// Injected errors for failure-path testing.
+	foldersErr error
+	convsErr   error
+	convErr    error
+	labsErr    error
+	recordsErr error
 }
 
 func (f *fakeWalhelmClient) GetFolders(ctx context.Context) ([]walhelm.Folder, error) {
+	if f.foldersErr != nil {
+		return nil, f.foldersErr
+	}
 	return f.folders, nil
 }
 
 func (f *fakeWalhelmClient) ListConversations(ctx context.Context, folderID string, since time.Time) ([]walhelm.ConversationSummary, error) {
+	f.sinceConversations = since
+	if f.convsErr != nil {
+		return nil, f.convsErr
+	}
+	if f.convsByFolder != nil {
+		return f.convsByFolder[folderID], nil
+	}
 	return f.conversations, nil
 }
 
 func (f *fakeWalhelmClient) GetConversation(ctx context.Context, id string) (*walhelm.Conversation, error) {
+	if f.convErr != nil {
+		return nil, f.convErr
+	}
+	if f.convByID != nil {
+		return f.convByID[id], nil
+	}
 	return f.conversation, nil
 }
 
 func (f *fakeWalhelmClient) ListLabPanels(ctx context.Context, since time.Time) ([]walhelm.LabPanel, error) {
+	f.sinceLabs = since
+	if f.labsErr != nil {
+		return nil, f.labsErr
+	}
 	return f.labPanels, nil
 }
 
 func (f *fakeWalhelmClient) ListRecords(ctx context.Context, since time.Time) ([]walhelm.MedicalRecord, error) {
+	f.sinceRecords = since
+	if f.recordsErr != nil {
+		return nil, f.recordsErr
+	}
 	return f.records, nil
 }
 
