@@ -20,6 +20,10 @@ import (
 // Each file is indented JSON. count is the total number of files written.
 // Subdirectories are created only when there is at least one item of that type.
 // Empty inputs produce count 0 and no filesystem changes.
+//
+// Collision safety: two IDs that sanitize to the same base name are written as
+// <base>.json, <base>-1.json, <base>-2.json, ... so no item is silently dropped.
+// Each type subdir has its own independent collision counter.
 func WriteTree(
 	root string,
 	msgs []*walhelm.Conversation,
@@ -31,8 +35,9 @@ func WriteTree(
 		if err = os.MkdirAll(dir, 0o755); err != nil {
 			return count, fmt.Errorf("WriteTree: mkdir messages: %w", err)
 		}
+		seen := make(map[string]int)
 		for i, conv := range msgs {
-			name := safeName(conv.ID, i)
+			name := uniqueName(conv.ID, i, seen)
 			data, merr := json.MarshalIndent(conv, "", "  ")
 			if merr != nil {
 				return count, fmt.Errorf("WriteTree: marshal conversation %q: %w", conv.ID, merr)
@@ -50,8 +55,9 @@ func WriteTree(
 		if err = os.MkdirAll(dir, 0o755); err != nil {
 			return count, fmt.Errorf("WriteTree: mkdir labs: %w", err)
 		}
+		seen := make(map[string]int)
 		for i, lab := range labs {
-			name := safeName(lab.ID, i)
+			name := uniqueName(lab.ID, i, seen)
 			data, merr := json.MarshalIndent(lab, "", "  ")
 			if merr != nil {
 				return count, fmt.Errorf("WriteTree: marshal lab %q: %w", lab.ID, merr)
@@ -69,8 +75,9 @@ func WriteTree(
 		if err = os.MkdirAll(dir, 0o755); err != nil {
 			return count, fmt.Errorf("WriteTree: mkdir records: %w", err)
 		}
+		seen := make(map[string]int)
 		for i, rec := range recs {
-			name := safeName(rec.ID, i)
+			name := uniqueName(rec.ID, i, seen)
 			data, merr := json.MarshalIndent(rec, "", "  ")
 			if merr != nil {
 				return count, fmt.Errorf("WriteTree: marshal record %q: %w", rec.ID, merr)
@@ -84,6 +91,25 @@ func WriteTree(
 	}
 
 	return count, nil
+}
+
+// uniqueName returns a collision-safe filename stem for an item. It computes
+// the base safe name for the ID; if that base has already been used in the
+// current subdir (tracked by seen), it appends "-<n>" where n is the running
+// count for that base (starting at 1). The first occurrence is always the
+// bare base with no suffix.
+//
+// seen maps each base to the number of times it has been assigned so far; the
+// caller must pass a fresh map per type subdir and must not share it across
+// subdirs.
+func uniqueName(id string, fallbackIndex int, seen map[string]int) string {
+	base := safeName(id, fallbackIndex)
+	n := seen[base]
+	seen[base] = n + 1
+	if n == 0 {
+		return base
+	}
+	return fmt.Sprintf("%s-%d", base, n)
 }
 
 // safeName converts an arbitrary ID string into a safe single-component

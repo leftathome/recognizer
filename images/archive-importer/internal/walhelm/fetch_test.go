@@ -161,36 +161,94 @@ func TestFetchEmpty(t *testing.T) {
 	}
 }
 
-// TestFetchErrorPropagation asserts that a client error (here from
-// ListLabPanels) is surfaced and no deliverable tree is returned.
+// TestFetchErrorPropagation asserts that each of the five client error paths
+// surfaces the sentinel via errors.Is, returns treeDir=="", items==0, and
+// leaves the input State unchanged. For convErr the fake must return at least
+// one folder and one conversation summary so that GetConversation is reached.
 func TestFetchErrorPropagation(t *testing.T) {
 	ctx := context.Background()
 	sentinel := errors.New("boom")
-	fake := &fakeWalhelmClient{
-		folders: []walhelm.Folder{{ID: "f1"}},
-		convsByFolder: map[string][]walhelm.ConversationSummary{
-			"f1": {{ID: "c1", FolderID: "f1"}},
-		},
-		convByID: map[string]*walhelm.Conversation{
-			"c1": {ConversationSummary: walhelm.ConversationSummary{ID: "c1"}},
-		},
-		labsErr: sentinel,
+
+	// baseFolder and baseSummary are shared by the cases that need to reach a
+	// later call in the pipeline (convsErr, convErr, labsErr, recordsErr).
+	baseFolder := []walhelm.Folder{{ID: "f1"}}
+	baseSummary := map[string][]walhelm.ConversationSummary{
+		"f1": {{ID: "c1", FolderID: "f1"}},
+	}
+	baseConv := map[string]*walhelm.Conversation{
+		"c1": {ConversationSummary: walhelm.ConversationSummary{ID: "c1"}},
 	}
 
-	treeDir, _, items, err := Fetch(ctx, fake, State{})
-	if treeDir != "" {
-		defer os.RemoveAll(treeDir)
+	cases := []struct {
+		name string
+		fake *fakeWalhelmClient
+	}{
+		{
+			name: "foldersErr",
+			fake: &fakeWalhelmClient{
+				foldersErr: sentinel,
+			},
+		},
+		{
+			name: "convsErr",
+			fake: &fakeWalhelmClient{
+				folders:  baseFolder,
+				convsErr: sentinel,
+			},
+		},
+		{
+			name: "convErr",
+			// Must have a folder + a conversation summary so GetConversation is called.
+			fake: &fakeWalhelmClient{
+				folders:       baseFolder,
+				convsByFolder: baseSummary,
+				convErr:       sentinel,
+			},
+		},
+		{
+			name: "labsErr",
+			fake: &fakeWalhelmClient{
+				folders:       baseFolder,
+				convsByFolder: baseSummary,
+				convByID:      baseConv,
+				labsErr:       sentinel,
+			},
+		},
+		{
+			name: "recordsErr",
+			fake: &fakeWalhelmClient{
+				folders:       baseFolder,
+				convsByFolder: baseSummary,
+				convByID:      baseConv,
+				recordsErr:    sentinel,
+			},
+		},
 	}
-	if err == nil {
-		t.Fatal("Fetch error = nil, want non-nil")
-	}
-	if !errors.Is(err, sentinel) {
-		t.Errorf("Fetch error = %v, want wrapping %v", err, sentinel)
-	}
-	if items != 0 {
-		t.Errorf("items = %d, want 0", items)
-	}
-	if treeDir != "" {
-		t.Errorf("treeDir = %q, want empty (no deliverable tree)", treeDir)
+
+	inState := State{} // zero value; must be returned unchanged on error
+
+	for _, tc := range cases {
+		tc := tc // capture range var
+		t.Run(tc.name, func(t *testing.T) {
+			treeDir, newState, items, err := Fetch(ctx, tc.fake, inState)
+			if treeDir != "" {
+				defer os.RemoveAll(treeDir)
+			}
+			if err == nil {
+				t.Fatal("Fetch error = nil, want non-nil")
+			}
+			if !errors.Is(err, sentinel) {
+				t.Errorf("Fetch error = %v, want wrapping sentinel %v", err, sentinel)
+			}
+			if treeDir != "" {
+				t.Errorf("treeDir = %q, want empty (no deliverable tree)", treeDir)
+			}
+			if items != 0 {
+				t.Errorf("items = %d, want 0", items)
+			}
+			if newState != inState {
+				t.Errorf("newState = %+v, want input state %+v unchanged", newState, inState)
+			}
+		})
 	}
 }

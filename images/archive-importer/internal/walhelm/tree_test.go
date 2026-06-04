@@ -174,6 +174,74 @@ func TestWriteTree_UnsafeIDs(t *testing.T) {
 	}
 }
 
+// TestWriteTree_CollisionSafeNames verifies that two message IDs that sanitize
+// to the same base name both produce distinct files rather than the second
+// silently overwriting the first.
+//
+// "a/b" sanitizes to "a_b" (the slash becomes "_").
+// "a_b" sanitizes to "a_b" as well — a direct collision.
+// Expected outcome: messages/a_b.json (first) and messages/a_b-1.json (second),
+// total count 2, each file unmarshals to the correct original ID.
+func TestWriteTree_CollisionSafeNames(t *testing.T) {
+	root := t.TempDir()
+
+	id1 := "a/b"  // sanitizes to "a_b"
+	id2 := "a_b"  // sanitizes to "a_b" -- collides with id1
+	msgs := []*walhelm.Conversation{
+		makeConversation(id1),
+		makeConversation(id2),
+	}
+
+	count, err := WriteTree(root, msgs, nil, nil)
+	if err != nil {
+		t.Fatalf("WriteTree returned error: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2", count)
+	}
+
+	msgDir := filepath.Join(root, "messages")
+	entries, err := os.ReadDir(msgDir)
+	if err != nil {
+		t.Fatalf("reading messages dir: %v", err)
+	}
+	if len(entries) != 2 {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("expected 2 files in messages dir, got %d: %v", len(entries), names)
+	}
+
+	// Collect names for readability in error messages.
+	fileNames := make([]string, len(entries))
+	for i, e := range entries {
+		fileNames[i] = e.Name()
+	}
+
+	// The first file must be the bare base, the second must have the -1 suffix.
+	wantFiles := map[string]string{
+		"a_b.json":   id1,
+		"a_b-1.json": id2,
+	}
+	for wantName, wantID := range wantFiles {
+		path := filepath.Join(msgDir, wantName)
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			t.Errorf("expected file %s missing (dir contains: %v): %v", wantName, fileNames, rerr)
+			continue
+		}
+		var got walhelm.Conversation
+		if uerr := json.Unmarshal(data, &got); uerr != nil {
+			t.Errorf("unmarshal %s: %v", wantName, uerr)
+			continue
+		}
+		if got.ID != wantID {
+			t.Errorf("%s: ID = %q, want %q", wantName, got.ID, wantID)
+		}
+	}
+}
+
 // TestWriteTree_SafeName_EmptyID verifies that an empty ID does not produce
 // a file called ".json" (the safeName fallback must emit a non-empty name).
 func TestWriteTree_SafeName_EmptyID(t *testing.T) {
