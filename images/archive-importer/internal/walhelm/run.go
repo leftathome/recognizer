@@ -45,7 +45,10 @@ type RunConfig struct {
 //     delivery has already succeeded; the worst case is a duplicate (idempotent)
 //     delivery on the next run.
 func RunOnce(ctx context.Context, cli WalhelmClient, cfg RunConfig) (delivered bool, err error) {
-	st, _ := LoadState(cfg.StateDir, cfg.SubjectPrincipal)
+	st, err := LoadState(cfg.StateDir, cfg.SubjectPrincipal)
+	if err != nil {
+		return false, fmt.Errorf("load state: %w", err)
+	}
 
 	treeDir, newState, items, err := Fetch(ctx, cli, st)
 	if err != nil {

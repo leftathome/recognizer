@@ -33,6 +33,11 @@ import (
 type fakeTusServer struct {
 	token string
 
+	// forceFailCreate, when true, causes POST /v1/archives to return 500 so
+	// the upload fails before any state is saved. Used by
+	// TestRunOnce_UploadError_NoStateSave to lock in the at-least-once guarantee.
+	forceFailCreate bool
+
 	mu          sync.Mutex
 	postCalls   int
 	metadata    string // raw Upload-Metadata header captured at POST
@@ -70,6 +75,15 @@ func (s *fakeTusServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.postCalls++
+	fail := s.forceFailCreate
+	s.mu.Unlock()
+
+	if fail {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	s.mu.Lock()
 	s.metadata = r.Header.Get("Upload-Metadata")
 	s.uploadLen, _ = strconv.ParseInt(r.Header.Get("Upload-Length"), 10, 64)
 	s.location = "/v1/archives/walhelm-upload-1"
@@ -207,6 +221,7 @@ func TestRunOnce_E2E_DeliversWalhelmExport(t *testing.T) {
 	meta := decodeUploadMetadata(t, srv.metadata)
 	wantMeta := map[string]string{
 		"media_type":      "archive/walhelm-export",
+		"matcher_id":      "walhelm/export",
 		"acq_provider":    "kp-wa",
 		"acq_account_id":  "leftathome",
 		"acq_auth_method": "browser_session",
@@ -242,6 +257,61 @@ func TestRunOnce_E2E_DeliversWalhelmExport(t *testing.T) {
 	}
 	if st.MessagesSince.IsZero() || st.LabsSince.IsZero() || st.RecordsSince.IsZero() {
 		t.Errorf("state cursors not advanced: %+v", st)
+	}
+}
+
+// TestRunOnce_UploadError_NoStateSave locks in the at-least-once delivery
+// invariant's critical branch: when the upload POST returns 500 (or any
+// delivery error), RunOnce must return (false, non-nil err) AND must NOT write
+// a state file. Cursors must not advance so the next run re-fetches and
+// re-delivers the same data.
+func TestRunOnce_UploadError_NoStateSave(t *testing.T) {
+	srv := &fakeTusServer{token: "tkn", forceFailCreate: true}
+	ts := httptest.NewServer(srv.handler())
+	defer ts.Close()
+
+	// Provide enough data so Fetch returns items > 0, guaranteeing RunOnce
+	// reaches the delivery step before the upload fails.
+	fake := &fakeWalhelmClient{
+		acctID: "leftathome",
+		folders: []walhelm.Folder{
+			{ID: "f1", Name: "Inbox"},
+		},
+		convsByFolder: map[string][]walhelm.ConversationSummary{
+			"f1": {{ID: "c1", FolderID: "f1", Subject: "Thread one"}},
+		},
+		convByID: map[string]*walhelm.Conversation{
+			"c1": {
+				ConversationSummary: walhelm.ConversationSummary{ID: "c1", FolderID: "f1", Subject: "Thread one"},
+				Messages:            []walhelm.Message{{ID: "m1", Sender: "doctor", Body: "hello"}},
+			},
+		},
+	}
+
+	stateDir := t.TempDir()
+	cfg := RunConfig{
+		SubjectPrincipal: "walhelm:9f2a",
+		StateDir:         stateDir,
+		IngestURL:        ts.URL,
+		IngestToken:      "tkn",
+		IngestSourceID:   "recognizer-test",
+		HTTPClient:       ts.Client(),
+	}
+
+	delivered, err := RunOnce(context.Background(), fake, cfg)
+
+	// Must report failure.
+	if err == nil {
+		t.Fatal("RunOnce error = nil, want non-nil on upload failure")
+	}
+	if delivered {
+		t.Fatalf("RunOnce delivered = true, want false on upload failure")
+	}
+
+	// Cursors must NOT have advanced: state file must not exist.
+	statePath := stateFilePath(stateDir, cfg.SubjectPrincipal)
+	if _, statErr := os.Stat(statePath); !os.IsNotExist(statErr) {
+		t.Fatalf("state file %s must not exist after upload failure (at-least-once guarantee); stat err = %v", statePath, statErr)
 	}
 }
 
