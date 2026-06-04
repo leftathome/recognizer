@@ -1,0 +1,87 @@
+{{- if .Values.walhelmSource.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "recognizer.fullname" . }}-walhelm-fetch
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: walhelm-fetch
+  annotations:
+    recognizer.orac.local/usage: |
+      Suspended on install (spec 04). Once the member's Vault session secret
+      is populated and verified, resume the schedule with:
+        kubectl -n {{ .Release.Namespace }} patch cronjob {{ include "recognizer.fullname" . }}-walhelm-fetch \
+          --type merge -p '{"spec":{"suspend":false}}'
+spec:
+  # Opt-in safety: rendered suspended even when walhelmSource.enabled=true, so
+  # enabling the chart objects never starts fetching until an operator resumes.
+  suspend: true
+  schedule: {{ .Values.walhelmSource.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "recognizer.labels" . | nindent 12 }}
+            app.kubernetes.io/component: walhelm-fetch
+        spec:
+          serviceAccountName: {{ include "recognizer.fullname" . }}-walhelm-fetch
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/arch: amd64
+          # State dir lives on the shared data PVC, which is owned by
+          # uid 1000:1000 (chowned by the optical-ripper init container).
+          # Run as 1000:1000 + fsGroup 1000 so WALHELM_STATE_DIR writes
+          # succeed, matching archive-importer.
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            fsGroup: 1000
+            fsGroupChangePolicy: OnRootMismatch
+            seccompProfile:
+              type: RuntimeDefault
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: walhelm-fetch
+              image: {{ include "recognizer.image" (dict "root" $ "name" .Values.walhelmSource.image.name "tag" .Values.walhelmSource.image.tag) }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              envFrom:
+                - configMapRef:
+                    name: {{ include "recognizer.fullname" . }}-walhelm-fetch
+              env:
+                # Glovebox bearer token (secret) -- the non-secret URL +
+                # source_id come from the ConfigMap via envFrom.
+                - name: GLOVEBOX_INGEST_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "recognizer.fullname" . }}-walhelm-glovebox-ingest-token
+                      key: token
+              volumeMounts:
+                # walhelm session JSON, projected by the ExternalSecret and
+                # mounted read-only at WALHELM_SESSION_FILE's directory.
+                - name: walhelm-session
+                  mountPath: {{ .Values.walhelmSource.sessionMountPath | quote }}
+                  readOnly: true
+                # Shared data PVC holds WALHELM_STATE_DIR (per-subject cursors).
+                - name: data
+                  mountPath: /data
+              resources:
+                {{- toYaml .Values.walhelmSource.resources | nindent 16 }}
+          volumes:
+            - name: walhelm-session
+              secret:
+                secretName: {{ include "recognizer.fullname" . }}-walhelm-session
+            - name: data
+              persistentVolumeClaim:
+                claimName: {{ include "recognizer.dataClaimName" . }}
+{{- end }}
