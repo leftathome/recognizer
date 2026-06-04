@@ -183,7 +183,7 @@ func TestUploadMetadataHeader_BackwardCompat_Mbox(t *testing.T) {
 func TestValidate_WalhelmExport_RequiresProvenanceFields(t *testing.T) {
 	good := Item{
 		ArchiveID:       "w-1",
-		ArchiveFilename:  "export.tar.gz",
+		ArchiveFilename: "export.tar.gz",
 		MediaType:       "archive/walhelm-export",
 		MatcherID:       "walhelm/health",
 		SHA256:          strings.Repeat("d", 64),

@@ -187,8 +187,8 @@ func TestWriteTree_UnsafeIDs(t *testing.T) {
 func TestWriteTree_CollisionSafeNames(t *testing.T) {
 	root := t.TempDir()
 
-	id1 := "a/b"  // sanitizes to "a_b"
-	id2 := "a_b"  // sanitizes to "a_b" -- collides with id1
+	id1 := "a/b" // sanitizes to "a_b"
+	id2 := "a_b" // sanitizes to "a_b" -- collides with id1
 	msgs := []*walhelm.Conversation{
 		makeConversation(id1),
 		makeConversation(id2),

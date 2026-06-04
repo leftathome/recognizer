@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Walhelm health source (`cmd/walhelm-fetch`, spec 04)** -- a new content
+  source that fetches Kaiser Permanente WA health data (secure messages, lab
+  results, medical-record metadata) via the `walhelm-go` library and delivers it
+  to Glovebox as one `archive/walhelm-export` carrying spec-15 provenance
+  (acquisition identity + opaque subject principal + audience), reusing the
+  existing tus.io delivery client. The KP session is acquired out-of-band and
+  injected (`WALHELM_SESSION_FILE`); cursors advance only after a successful
+  delivery (at-least-once). Ships as a **suspended, opt-in** CronJob
+  (`walhelmSource.enabled=false` by default). Record-download (zip) and
+  proxy/multi-patient are deferred (spec 04 §2.2, §11). The delivery layer was
+  extended additively to carry `acq_*`/`data_subject`/`audience` for the new
+  media type (existing Takeout/Meta deliveries are byte-identical on the wire).
+  See `docs/specs/04-walhelm-health-source.md`.
+
 ## [0.4.3] - 2026-05-23
 
 ### Fixed

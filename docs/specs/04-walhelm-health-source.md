@@ -1,6 +1,6 @@
 # Walhelm Health Source -- Design Specification
 
-**Version 0.1 (DRAFT) -- June 2026**
+**Version 0.1 -- June 2026** (implemented; messages/labs/records — record-download zip + proxy deferred per §2.2/§11)
 
 *This document specifies a new content **source** for the recognizer (archive-importer): a fetcher that pulls Kaiser Permanente Washington health data (secure messages, lab results, medical records) via the [walhelm-go](https://github.com/leftathome/walhelm-go) library and delivers it to Glovebox as an `archive/walhelm-export` archive carrying producer-asserted provenance (acquisition identity + opaque subject principal + audience), per Glovebox spec 15. Unlike the existing Google Takeout / Meta sources -- which unpack and classify an archive file already on disk -- the walhelm source FETCHES from a live API and synthesizes the directory tree itself, then reuses the existing spec-13 delivery client to ship it. This is SP3 of the "health connector" program; it depends on the Glovebox SP1 contract (spec 15, now on Glovebox `main`) and on walhelm-go's existing fixture-backed read API. The live record-download (zip) and proxy/multi-patient capabilities are out of scope here (blocked on live-portal reverse-engineering); the session is acquired out-of-band and injected.*
 
