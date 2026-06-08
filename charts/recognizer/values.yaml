@@ -182,3 +182,68 @@ archiveImporter:
       secretStoreRef:
         name: "vault-backend"
         kind: "ClusterSecretStore"
+
+# ============================================================================
+# walhelm-source (spec 04 / SP3): a SUSPENDED CronJob that runs walhelm-fetch
+# to pull a member's walhelm export incrementally and deliver recognized
+# subtrees to glovebox. OPT-IN and OFF by default -- with enabled=false the
+# chart renders NO walhelm objects at all. Enable per release once the image
+# is built and the member's Vault session secret is populated.
+#
+# Operator prerequisites (one-shot, NOT chart-renderable):
+#   - A walhelm session JSON in Vault at the path below (run `walhelm login`,
+#     then write the session to secret/walhelm/session/<member>).
+#   - The same glovebox NetworkPolicy namespace label as archive-importer:
+#       kubectl label ns recognizer name=openclaw-recognizer
+# ============================================================================
+walhelmSource:
+  enabled: false
+  image:
+    name: walhelm-fetch
+    tag: ""
+  # data_subject principal for this member, e.g. "walhelm:9f2a". REQUIRED
+  # when enabled; passed to the binary as WALHELM_SUBJECT_PRINCIPAL. Also
+  # used to select the per-member Vault session path (sessionVault.member
+  # defaults to this value).
+  subjectPrincipal: ""
+  # Cron schedule for the fetch cycle. Only meaningful once `suspend` is
+  # lifted by the operator (the rendered CronJob is suspended; see cronjob.yaml).
+  schedule: "*/30 * * * *"
+  # Per-subject cursor state. Lives on the shared data PVC so cursors survive
+  # pod restarts. Maps to WALHELM_STATE_DIR.
+  stateDir: /data/walhelm
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  logLevel: info
+  # Vault-backed walhelm session JSON. ESO projects it into a Secret that the
+  # CronJob mounts read-only at sessionMountPath/sessionFileName; the binary
+  # reads it via WALHELM_SESSION_FILE.
+  sessionVault:
+    # Defaults to .subjectPrincipal when empty. The Vault key becomes
+    # secret/walhelm/session/<member> (KV v2 mount "secret"; ESO drops the
+    # "secret/" prefix in `key`).
+    member: ""
+    property: session.json
+    refreshInterval: "1m"
+    secretStoreRef:
+      name: "vault-backend"
+      kind: "ClusterSecretStore"
+  sessionMountPath: /var/run/walhelm
+  sessionFileName: session.json
+  # Glovebox archive-delivery target. Mirrors archiveImporter.gloveboxIngest;
+  # walhelm-fetch always delivers (the three GLOVEBOX_INGEST_* env are
+  # required by the binary), so there is no nested `enabled` toggle here --
+  # the whole block is gated by walhelmSource.enabled.
+  gloveboxIngest:
+    url: "http://glovebox.glovebox.svc.cluster.local:9091"
+    sourceID: "recognizer-walhelm"
+    vault:
+      refreshInterval: "1m"
+      secretStoreRef:
+        name: "vault-backend"
+        kind: "ClusterSecretStore"

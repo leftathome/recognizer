@@ -40,6 +40,30 @@ type Item struct {
 	// SizeBytes of the upload body. Must equal Upload-Length exactly;
 	// mismatch is rejected at POST with size_mismatch.
 	SizeBytes int64
+
+	// Spec-15 provenance fields. Required only for archive/walhelm-export;
+	// must be left zero for all other media types (they are not emitted on
+	// the wire when empty, preserving byte-identical headers for existing
+	// media types).
+
+	// AcqProvider identifies the health-data service that was scraped
+	// (e.g. "kp-wa"). Maps to Upload-Metadata key acq_provider.
+	AcqProvider string
+	// AcqAccountID is the end-user account identifier at the provider
+	// (e.g. "leftathome"). Maps to Upload-Metadata key acq_account_id.
+	AcqAccountID string
+	// AcqAuthMethod describes how the session was authenticated
+	// (e.g. "browser_session"). Maps to Upload-Metadata key acq_auth_method.
+	AcqAuthMethod string
+	// DataSubject is the URN of the data subject within the provider's
+	// namespace (e.g. "walhelm:9f2a"). Maps to Upload-Metadata key
+	// data_subject.
+	DataSubject string
+	// Audience is the ordered list of audience tokens that are permitted
+	// to access the archive (e.g. ["subject", "guardians"]). Emitted as
+	// a single comma-joined b64 value under the Upload-Metadata key
+	// audience. Required (len > 0) for archive/walhelm-export.
+	Audience []string
 }
 
 // AllowedMediaTypes are the media_type values glovebox accepts at the
@@ -50,6 +74,7 @@ var AllowedMediaTypes = map[string]struct{}{
 	"archive/google-takeout-subtree": {},
 	"archive/imap-export":            {},
 	"archive/generic-tarball":        {},
+	"archive/walhelm-export":         {},
 }
 
 // Validate returns an error if the Item is malformed. We do the cheap
@@ -73,6 +98,23 @@ func (i Item) Validate(sourceID string) error {
 	}
 	if i.MediaType == "archive/google-takeout-subtree" && i.SubtreeRelativePath == "" {
 		return fmt.Errorf("SubtreeRelativePath is required for archive/google-takeout-subtree")
+	}
+	if i.MediaType == "archive/walhelm-export" {
+		if i.AcqProvider == "" {
+			return fmt.Errorf("AcqProvider is required for archive/walhelm-export")
+		}
+		if i.AcqAccountID == "" {
+			return fmt.Errorf("AcqAccountID is required for archive/walhelm-export")
+		}
+		if i.AcqAuthMethod == "" {
+			return fmt.Errorf("AcqAuthMethod is required for archive/walhelm-export")
+		}
+		if i.DataSubject == "" {
+			return fmt.Errorf("DataSubject is required for archive/walhelm-export")
+		}
+		if len(i.Audience) == 0 {
+			return fmt.Errorf("Audience is required (len > 0) for archive/walhelm-export")
+		}
 	}
 	if len(i.SHA256) != 64 {
 		return fmt.Errorf("SHA256 must be 64 hex chars, got %d", len(i.SHA256))
@@ -106,6 +148,21 @@ func (i Item) UploadMetadataHeader(sourceID string) string {
 	}
 	if i.SubtreeRelativePath != "" {
 		pairs = append(pairs, "subtree_relative_path "+b64(i.SubtreeRelativePath))
+	}
+	if i.AcqProvider != "" {
+		pairs = append(pairs, "acq_provider "+b64(i.AcqProvider))
+	}
+	if i.AcqAccountID != "" {
+		pairs = append(pairs, "acq_account_id "+b64(i.AcqAccountID))
+	}
+	if i.AcqAuthMethod != "" {
+		pairs = append(pairs, "acq_auth_method "+b64(i.AcqAuthMethod))
+	}
+	if i.DataSubject != "" {
+		pairs = append(pairs, "data_subject "+b64(i.DataSubject))
+	}
+	if len(i.Audience) > 0 {
+		pairs = append(pairs, "audience "+b64(strings.Join(i.Audience, ",")))
 	}
 	return strings.Join(pairs, ",")
 }

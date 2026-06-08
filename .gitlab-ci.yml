@@ -30,6 +30,30 @@ variables:
     paths:
       - .cache/
 
+# Private-dependency resolution for github.com/leftathome/walhelm-go.
+#
+# walhelm-go's module path is github.com/leftathome/walhelm-go but its only
+# remote is https://gitlab.orac.local/steve/walhelm-go.git (vanity-path/host
+# mismatch). `go` cannot fetch it without (1) GOPRIVATE matching the MODULE
+# PATH so it skips the public proxy + checksum DB, and (2) a git insteadOf
+# rewrite to the real gitlab.orac.local remote carrying a credential.
+#
+# REQUIRED CI/CD VARIABLE: GITLAB_TOKEN -- a token (project/group access token
+# or PAT, masked + protected) with read_repository scope on steve/walhelm-go.
+# $CI_JOB_TOKEN works ONLY if steve/walhelm-go has this project added to its
+# "CI_JOB_TOKEN allowlist"; until that is configured, use $GITLAB_TOKEN.
+#
+# This snippet is harmless for Go modules that do not import walhelm-go
+# (GOPRIVATE/insteadOf only affect that one module path).
+# Single shell command (one before_script entry). A YAML anchor that is a
+# *sequence* would inject a nested list, which GitLab CI does not flatten the
+# way it flattens !reference; keeping it one scalar avoids that pitfall.
+.go-private-dep: &go_private_dep >-
+  export GOPRIVATE=github.com/leftathome/* &&
+  git config --global
+  url."https://oauth2:${GITLAB_TOKEN}@gitlab.orac.local/steve/walhelm-go.git".insteadOf
+  "https://github.com/leftathome/walhelm-go"
+
 test:python:
   stage: test
   image: python:3.12-slim
@@ -58,6 +82,10 @@ test:go:
   before_script:
     # `go install` puts binaries in $GOPATH/bin; that path is NOT on $PATH by default.
     - export PATH="$PATH:$(go env GOPATH)/bin"
+    # Private walhelm-go dep (see .go-private-dep). Harmless for modules that
+    # don't import it; jobs that need it (test:go:archive-importer) inherit
+    # this via !reference [test:go, before_script].
+    - *go_private_dep
     - go install github.com/jstemmer/go-junit-report/v2@latest
   script:
     - export PATH="$PATH:$(go env GOPATH)/bin"
@@ -76,6 +104,9 @@ vuln:go:
     KUBERNETES_MEMORY_LIMIT: "2Gi"
   before_script:
     - export PATH="$PATH:$(go env GOPATH)/bin"
+    # Private walhelm-go dep (see .go-private-dep). Inherited by
+    # vuln:go:archive-importer through the extends chain.
+    - *go_private_dep
     - go install golang.org/x/vuln/cmd/govulncheck@latest
   script:
     - export PATH="$PATH:$(go env GOPATH)/bin"
@@ -104,6 +135,11 @@ test:go:archive-importer:
 
 vuln:go:archive-importer:
   extends: vuln:go
+  # WARNING: do NOT add a before_script here. A job-level before_script
+  # REPLACES the inherited vuln:go one (GitLab CI does not merge them), which
+  # would silently drop the *go_private_dep anchor. If you need extra steps,
+  # use !reference [vuln:go, before_script] as the first entry, exactly as
+  # test:go:archive-importer does.
   variables:
     GO_MODULE_DIR: images/archive-importer
 
@@ -165,7 +201,10 @@ helm:lint:
     # --skip-tls-verify-registry: the orac cluster root CA isn't in kaniko's
     # trust store. Tracked as gitops-gr30 for the permanent fix (mount the CA
     # ConfigMap into all build pods via the runner config).
-    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/${DOCKERFILE}" $DEST_ARGS $PUSH_FLAG --skip-tls-verify-registry "$CI_REGISTRY" --verbosity info
+    # KANIKO_EXTRA_ARGS lets a job inject build-args (e.g. the walhelm-fetch
+    # build passes --build-arg GITLAB_TOKEN=... for the private walhelm-go dep).
+    # Empty for jobs that don't set it.
+    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/${DOCKERFILE}" $DEST_ARGS $PUSH_FLAG $KANIKO_EXTRA_ARGS --skip-tls-verify-registry "$CI_REGISTRY" --verbosity info
 
 build:document-scanner:
   extends: .build
@@ -184,6 +223,18 @@ build:archive-importer:
   variables:
     DOCKERFILE: images/archive-importer/Dockerfile
     COMPONENT: archive-importer
+
+# walhelm-fetch (spec 04 / SP3 Task 10). Same kaniko path as the other
+# images; additionally passes the GITLAB_TOKEN build-arg so the Dockerfile's
+# build stage can resolve the private walhelm-go dep (see .go-private-dep for
+# the required CI/CD variable). The token is consumed only in the build stage
+# and is not present in the distroless final image.
+build:walhelm-fetch:
+  extends: .build
+  variables:
+    DOCKERFILE: images/archive-importer/Dockerfile.walhelm-fetch
+    COMPONENT: walhelm-fetch
+    KANIKO_EXTRA_ARGS: --build-arg GITLAB_TOKEN=$GITLAB_TOKEN
 
 # ---------------------------------------------------------------------------
 # C3: package stage. helm lint --strict + kubeconform (with CRDs catalog) +

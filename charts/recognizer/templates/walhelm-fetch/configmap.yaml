@@ -1,0 +1,20 @@
+{{- if .Values.walhelmSource.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "recognizer.fullname" . }}-walhelm-fetch
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: walhelm-fetch
+data:
+  # Non-secret env. The session JSON (secret) is mounted from the
+  # ExternalSecret-backed Secret; the glovebox bearer token (secret) comes
+  # from its own ExternalSecret via secretKeyRef in the CronJob.
+  WALHELM_SESSION_FILE: {{ printf "%s/%s" .Values.walhelmSource.sessionMountPath .Values.walhelmSource.sessionFileName | quote }}
+  WALHELM_SUBJECT_PRINCIPAL: {{ required "walhelmSource.subjectPrincipal is required when walhelmSource.enabled=true" .Values.walhelmSource.subjectPrincipal | quote }}
+  WALHELM_STATE_DIR: {{ .Values.walhelmSource.stateDir | quote }}
+  GLOVEBOX_INGEST_URL: {{ .Values.walhelmSource.gloveboxIngest.url | quote }}
+  GLOVEBOX_INGEST_SOURCE_ID: {{ .Values.walhelmSource.gloveboxIngest.sourceID | quote }}
+  LOG_LEVEL: {{ .Values.walhelmSource.logLevel | quote }}
+{{- end }}

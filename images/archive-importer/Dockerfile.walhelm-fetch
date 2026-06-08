@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+#
+# Image build for the walhelm-fetch command (spec 04 / SP3 Task 9). Mirrors
+# the module-level images/archive-importer/Dockerfile exactly; the only
+# differences are the build target (./cmd/walhelm-fetch), the output binary
+# name, and the private-dependency resolution described below.
+#
+# Private dependency (walhelm-go):
+#   This module requires github.com/leftathome/walhelm-go, whose only remote
+#   is https://gitlab.orac.local/steve/walhelm-go.git (vanity-path/host
+#   mismatch). `go mod download` cannot fetch it without:
+#     1. GOPRIVATE matching the MODULE PATH (github.com/leftathome/*), so go
+#        skips the public proxy + checksum database (verified 2026-06-03;
+#        keying GOPRIVATE off the HOST does NOT work).
+#     2. a git `insteadOf` rewrite to the real gitlab.orac.local remote,
+#        carrying a credential the runner can use.
+#
+#   The credential is supplied at build time as a BuildKit secret and is
+#   NEVER baked into any image layer:
+#
+#     export GOPRIVATE='github.com/leftathome/*'   # only affects the build env
+#     DOCKER_BUILDKIT=1 docker build \
+#       -f images/archive-importer/Dockerfile.walhelm-fetch \
+#       --secret id=gitlab_token,env=GITLAB_TOKEN \
+#       -t <registry>/walhelm-fetch:<tag> .
+#
+#   (build context = repo root, matching the archive-importer Dockerfile and
+#   kaniko's CI_PROJECT_DIR context.)
+#
+#   For kaniko (CI, no BuildKit secrets) the token is passed as a build-arg
+#   GITLAB_TOKEN instead; see .gitlab-ci.yml build:walhelm-fetch. The arg is
+#   consumed only in the build stage and does not survive into the distroless
+#   final stage. DO NOT commit a token value here or anywhere in the repo.
+
+FROM golang:1.26.3-bookworm AS build
+WORKDIR /src
+
+# Private-dependency wiring. GITLAB_TOKEN arrives either as a BuildKit secret
+# (mounted at /run/secrets/gitlab_token) or as a build-arg (kaniko). The git
+# config + GOPRIVATE are scoped to this stage only.
+ARG GITLAB_TOKEN=""
+ENV GOPRIVATE=github.com/leftathome/*
+
+# Paths are relative to the repo root (kaniko's build context = CI_PROJECT_DIR).
+COPY images/archive-importer/go.mod images/archive-importer/go.sum ./
+RUN --mount=type=secret,id=gitlab_token,required=false \
+    TOKEN="$GITLAB_TOKEN"; \
+    if [ -z "$TOKEN" ] && [ -f /run/secrets/gitlab_token ]; then TOKEN="$(cat /run/secrets/gitlab_token)"; fi; \
+    if [ -z "$TOKEN" ]; then echo "ERROR: no gitlab token (set --secret id=gitlab_token or --build-arg GITLAB_TOKEN)"; exit 1; fi; \
+    git config --global url."https://oauth2:${TOKEN}@gitlab.orac.local/steve/walhelm-go.git".insteadOf "https://github.com/leftathome/walhelm-go"; \
+    go mod download; \
+    git config --global --unset url."https://oauth2:${TOKEN}@gitlab.orac.local/steve/walhelm-go.git".insteadOf
+
+COPY images/archive-importer/ .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/walhelm-fetch ./cmd/walhelm-fetch
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/walhelm-fetch /usr/local/bin/walhelm-fetch
+USER nonroot
+ENTRYPOINT ["/usr/local/bin/walhelm-fetch"]
