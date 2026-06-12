@@ -1,0 +1,31 @@
+{{- /*
+  Persistent volume for ARM's job database (archiver-kx9).
+
+  ARM's SQLite DB (DBFILE=/home/arm/db/arm.db) lives under /home/arm, which is
+  an emptyDir (raw rips stay on fast node-local scratch). Mounting this PVC at
+  just /home/arm/db keeps the DB -- rip history, dedupe records, per-job
+  metadata -- across pod restarts, without forcing the large raw-rip working
+  set onto a network volume. RWO: only the single ripper pod uses it.
+
+  Carries helm.sh/resource-policy: keep so a chart uninstall doesn't drop the
+  catalog. Sized ~5 KB/disc; 2Gi covers thousands of discs + local backups.
+*/ -}}
+{{- if and .Values.opticalRipper.enabled .Values.opticalRipper.database.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "recognizer.fullname" . }}-arm-db
+  namespace: {{ include "recognizer.hardwareNamespace" . }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: optical-ripper
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.opticalRipper.database.persistence.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.opticalRipper.database.persistence.size }}
+{{- end }}

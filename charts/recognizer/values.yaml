@@ -188,6 +188,21 @@ opticalRipper:
     enabled: true
     intervalSeconds: 30
 
+  # ARM's job database (DBFILE=/home/arm/db/arm.db) holds rip history, dedupe
+  # records, and per-job metadata. /home/arm is an emptyDir (raw rips go to fast
+  # node-local scratch), so without a dedicated persistent volume here the DB --
+  # and therefore dedupe ("already-ripped disc skipped") plus the archiver-yzp
+  # re-identify hook -- is wiped on every pod restart. See archiver-kx9.
+  # Footprint is ~5 KB/disc, so 2Gi covers thousands of discs plus local
+  # backups with room to spare; longhorn (3-replica) is used since this catalog
+  # warrants more durability than the /out rip scratch, and the class allows
+  # online expansion if needed.
+  database:
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClassName: longhorn
+
 # ============================================================================
 # archive-importer (spec 03): one-shot/CronJob that ingests Google Takeout
 # (and future) archives. Disabled by default for Phase D rollout; enable

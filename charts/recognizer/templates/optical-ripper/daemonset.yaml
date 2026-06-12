@@ -78,6 +78,12 @@ spec:
               mountPath: /out
             - name: arm-home
               mountPath: /home/arm
+            {{- if .Values.opticalRipper.database.persistence.enabled }}
+            # Mounted here too so the chown -R below also fixes ownership on the
+            # persistent DB volume (archiver-kx9).
+            - name: arm-db
+              mountPath: /home/arm/db
+            {{- end }}
             - name: arm-config-source
               mountPath: /etc/arm/config-source
               readOnly: true
@@ -154,6 +160,12 @@ spec:
               mountPath: /etc/arm/config
             - name: arm-home
               mountPath: /home/arm
+            {{- if .Values.opticalRipper.database.persistence.enabled }}
+            # Persistent ARM job DB (archiver-kx9): survives pod restarts so
+            # dedupe history + per-job metadata are not wiped.
+            - name: arm-db
+              mountPath: /home/arm/db
+            {{- end }}
             {{- if .Values.hardware.enabled }}
             - name: host-dev
               mountPath: /dev
@@ -179,6 +191,12 @@ spec:
             name: {{ include "recognizer.fullname" . }}-arm-config
         - name: arm-home
           emptyDir: {}
+        {{- if .Values.opticalRipper.database.persistence.enabled }}
+        # Persistent ARM job DB volume (archiver-kx9). Mounted at /home/arm/db.
+        - name: arm-db
+          persistentVolumeClaim:
+            claimName: {{ include "recognizer.fullname" . }}-arm-db
+        {{- end }}
         {{- if .Values.hardware.enabled }}
         # Host device tree so MakeMKV sees /dev/sr0 + the drive's dynamically-
         # numbered /dev/sg<N>. Requires the privileged securityContext above
