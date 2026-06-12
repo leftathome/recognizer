@@ -1,18 +1,38 @@
 {{- /*
-  Cross-namespace data access for hardware-attached workloads (archiver-ztw).
+  Data volume for hardware-attached workloads (archiver-ztw).
 
-  The optical-ripper (and later document-scanner) move to the hardware
-  namespace, but they share the capture-data volume with the importer/relay
-  that stay in the release namespace. PVCs are namespaced, so we mint a second
-  PV + PVC here in the hardware namespace pointing at the SAME NFS export. NFS
-  RWX lets both namespaces' pods read/write the same files.
+  The optical-ripper (and later document-scanner) live in the hardware
+  namespace. PVCs are namespaced, so they need their own /out volume there.
 
-  Only renders for backend=nfs. For backend=longhorn a single RWX volume can't
-  be claimed from two namespaces; for backend=existing the operator must supply
-  a PVC in the hardware namespace named like recognizer.dataClaimName. Both are
-  out of scope here -- the deployed cluster uses nfs.
+  Two modes (values.hardware.data.mode):
+
+    scratch  Throwaway RWO PVC on a least-durable StorageClass (single
+             replica, Delete reclaim). Used while the NAS is unavailable.
+             The release-namespace importer CANNOT read this volume, so the
+             rip->archive hand-off is deferred until mode=nfs. Adequate to
+             validate drive-plug -> rip -> file-on-PVC.
+
+    nfs      Cross-namespace NFS PV+PVC bound to the same export as the
+             release-namespace data volume, so the hardware-ns ripper and the
+             main-ns importer share /out. Set when the NAS is cabled.
 */ -}}
-{{- if and .Values.hardware.enabled .Values.storage.enabled (eq .Values.storage.backend "nfs") }}
+{{- if .Values.hardware.enabled }}
+{{- if eq .Values.hardware.data.mode "scratch" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "recognizer.dataClaimName" . }}
+  namespace: {{ include "recognizer.hardwareNamespace" . }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.hardware.data.scratch.accessMode }}
+  storageClassName: {{ .Values.hardware.data.scratch.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.hardware.data.scratch.size }}
+{{- else if eq .Values.hardware.data.mode "nfs" }}
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -32,14 +52,12 @@ spec:
   persistentVolumeReclaimPolicy: {{ .Values.storage.nfs.reclaimPolicy }}
   storageClassName: {{ .Values.storage.nfs.storageClassName }}
   nfs:
-    server: {{ required "Set storage.nfs.server to the NFS server hostname or IP (required when storage.backend=nfs)" .Values.storage.nfs.server | quote }}
+    server: {{ required "Set storage.nfs.server when hardware.data.mode=nfs" .Values.storage.nfs.server | quote }}
     path: {{ .Values.storage.nfs.path | quote }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  # Same claim name as the release-namespace PVC so recognizer.dataClaimName
-  # resolves correctly for the relocated ripper. Distinct namespace.
   name: {{ include "recognizer.dataClaimName" . }}
   namespace: {{ include "recognizer.hardwareNamespace" . }}
   labels:
@@ -54,4 +72,5 @@ spec:
       storage: {{ .Values.storage.size }}
   storageClassName: {{ .Values.storage.nfs.storageClassName }}
   volumeName: {{ include "recognizer.fullname" . }}-data-hw
+{{- end }}
 {{- end }}

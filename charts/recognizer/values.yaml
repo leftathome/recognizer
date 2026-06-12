@@ -43,6 +43,21 @@ hardware:
   # 'privileged' is required for hostPath /dev + privileged containers.
   podSecurityStandard: privileged
 
+  # Data volume the hardware-ns workloads mount at /out. PVCs are namespaced,
+  # so this is separate from the release-namespace data volume.
+  data:
+    # scratch -> throwaway RWO PVC on a least-durable StorageClass. Use until
+    #            the NAS is available; the importer hand-off is deferred
+    #            (importer is in the release ns and can't read this volume).
+    # nfs     -> cross-namespace NFS PV+PVC sharing /out with the importer
+    #            (set when the NAS is cabled; reuses storage.nfs.*).
+    mode: scratch
+    scratch:
+      # Least-durable class in the cluster: single replica, Delete reclaim.
+      storageClassName: longhorn-single-replica
+      accessMode: ReadWriteOnce
+      size: 50Gi
+
 commonLabels: {}
 commonAnnotations: {}
 
