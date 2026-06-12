@@ -3,7 +3,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "recognizer.fullname" . }}-arm-config
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "recognizer.hardwareNamespace" . }}
   labels:
     {{- include "recognizer.labels" . | nindent 4 }}
     app.kubernetes.io/component: optical-ripper

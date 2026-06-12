@@ -1,0 +1,57 @@
+{{- /*
+  Cross-namespace data access for hardware-attached workloads (archiver-ztw).
+
+  The optical-ripper (and later document-scanner) move to the hardware
+  namespace, but they share the capture-data volume with the importer/relay
+  that stay in the release namespace. PVCs are namespaced, so we mint a second
+  PV + PVC here in the hardware namespace pointing at the SAME NFS export. NFS
+  RWX lets both namespaces' pods read/write the same files.
+
+  Only renders for backend=nfs. For backend=longhorn a single RWX volume can't
+  be claimed from two namespaces; for backend=existing the operator must supply
+  a PVC in the hardware namespace named like recognizer.dataClaimName. Both are
+  out of scope here -- the deployed cluster uses nfs.
+*/ -}}
+{{- if and .Values.hardware.enabled .Values.storage.enabled (eq .Values.storage.backend "nfs") }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  # Distinct from the release-namespace PV (data-pv.yaml); PVs are
+  # cluster-scoped so the name must differ even though both target the same
+  # NFS export.
+  name: {{ include "recognizer.fullname" . }}-data-hw
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  capacity:
+    storage: {{ .Values.storage.size }}
+  accessModes:
+    {{- toYaml .Values.storage.accessModes | nindent 4 }}
+  persistentVolumeReclaimPolicy: {{ .Values.storage.nfs.reclaimPolicy }}
+  storageClassName: {{ .Values.storage.nfs.storageClassName }}
+  nfs:
+    server: {{ required "Set storage.nfs.server to the NFS server hostname or IP (required when storage.backend=nfs)" .Values.storage.nfs.server | quote }}
+    path: {{ .Values.storage.nfs.path | quote }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  # Same claim name as the release-namespace PVC so recognizer.dataClaimName
+  # resolves correctly for the relocated ripper. Distinct namespace.
+  name: {{ include "recognizer.dataClaimName" . }}
+  namespace: {{ include "recognizer.hardwareNamespace" . }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.storage.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.size }}
+  storageClassName: {{ .Values.storage.nfs.storageClassName }}
+  volumeName: {{ include "recognizer.fullname" . }}-data-hw
+{{- end }}
