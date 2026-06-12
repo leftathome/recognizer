@@ -1,0 +1,17 @@
+{{- if .Values.hardware.enabled }}
+# Dedicated namespace for hardware-attached workloads (optical-ripper,
+# document-scanner). PSS is relaxed to `privileged` here ONLY so these pods can
+# hostPath-mount the host device tree (/dev) and udev, which they need to
+# self-discover dynamically-enumerated optical/scanner devices. The main
+# release namespace stays PSS=restricted. See archiver-6ix.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.hardware.namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/part-of: recognizer
+    pod-security.kubernetes.io/enforce: {{ .Values.hardware.podSecurityStandard }}
+    pod-security.kubernetes.io/audit: {{ .Values.hardware.podSecurityStandard }}
+    pod-security.kubernetes.io/warn: {{ .Values.hardware.podSecurityStandard }}
+{{- end }}

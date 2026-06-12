@@ -26,6 +26,23 @@ image:
 
 createNamespace: false
 
+# -----------------------------------------------------------------------------
+# Hardware-attached workloads (optical-ripper, document-scanner) run in a
+# dedicated namespace with relaxed Pod Security so they can reach the host
+# device tree (/dev) and udev, and thus self-discover dynamically-enumerated
+# optical/scanner devices. The main release namespace stays PSS=restricted so
+# the importer/API/relay keep the tighter posture. See archiver-6ix and
+# docs/optical-ingest-e2e-plan.md.
+hardware:
+  # When true, render the hardware namespace and place hardware-attached
+  # workloads there. When false, those workloads render in the release
+  # namespace (legacy single-namespace behavior, PSS=restricted).
+  enabled: true
+  namespace: recognizer-hardware
+  # Pod Security Standards level enforced on the hardware namespace.
+  # 'privileged' is required for hostPath /dev + privileged containers.
+  podSecurityStandard: privileged
+
 commonLabels: {}
 commonAnnotations: {}
 

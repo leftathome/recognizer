@@ -64,6 +64,19 @@ When `storage.backend == existing`, returns the operator-supplied
 {{- end -}}
 
 {{/*
+Namespace for hardware-attached workloads (optical-ripper, document-scanner).
+Returns the dedicated hardware namespace when hardware.enabled, otherwise the
+release namespace (legacy single-namespace behavior). See archiver-6ix.
+*/}}
+{{- define "recognizer.hardwareNamespace" -}}
+{{- if .Values.hardware.enabled -}}
+{{- .Values.hardware.namespace -}}
+{{- else -}}
+{{- .Release.Namespace -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 URL of the in-cluster notification-relay Service.
 Default used by archiveImporter when archiveImporter.config.relayUrl is empty.
 */}}
