@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-12
+
+### Added
+
+- **Persistent ARM job database (`opticalRipper.database.persistence`,
+  archiver-kx9)** -- a dedicated RWO PVC (`<release>-arm-db`, default 2Gi on
+  longhorn) mounted at `/home/arm/db`, so ARM's SQLite DB (rip history, dedupe
+  records, per-job metadata) survives pod restarts. Previously it lived on the
+  `arm-home` emptyDir and was wiped on every restart, breaking dedupe and any
+  post-restart metadata fix. Raw rips stay on the node-local emptyDir scratch.
+- **Optical tender (`opticalRipper.onConnectWithDisc`, `opticalRipper.ejectGuard`;
+  archiver-9vq, archiver-7xe)** -- a postStart-backgrounded script in the
+  hardware namespace that (a) acts on a disc already loaded when the drive
+  connects (no media-change uevent fires, so ARM is otherwise idle):
+  `import` runs ARM's pipeline, `eject` ejects to force a re-insert; and
+  (b) clears the SCSI manual-eject inhibit at startup and while idle, so the
+  hardware eject button keeps working between rips.
+
+### Changed
+
+- **`optical-ripper` rips Blu-rays losslessly (no HandBrake transcode)** -- set
+  `RIPMETHOD_DVD`/`RIPMETHOD_BR` to `mkv` in the ARM config. ARM 2.22+ split
+  `RIPMETHOD` per-media; left at the template default (`PLACEHOLDER`), Blu-rays
+  were transcoded via HandBrake (slow, lossy) instead of MakeMKV raw rip.
+
 ## [0.5.0] - 2026-06-12
 
 ### Added

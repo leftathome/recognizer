@@ -15,7 +15,13 @@ data:
     # it first or the loader (arm/config/config.py:36) blows up with
     # KeyError: 'INSTALLPATH'. Match the in-image install location.
     INSTALLPATH: "/opt/arm/"
+    # Lossless MakeMKV rip, NO HandBrake transcode. ARM 2.22+ split RIPMETHOD
+    # into per-media RIPMETHOD_DVD/RIPMETHOD_BR; if those are left at the
+    # template default ("PLACEHOLDER") ARM transcodes Blu-rays via HandBrake
+    # (slow, lossy). Set all three to "mkv" for archival raw rips.
     RIPMETHOD: "mkv"
+    RIPMETHOD_DVD: "mkv"
+    RIPMETHOD_BR: "mkv"
     EJECTENABLED: true
     JUSTMAKEISO: false
     COMPLETED_PATH: "/out/video"
