@@ -102,6 +102,15 @@ spec:
                 secretKeyRef:
                   name: omdb-api
                   key: api-key
+            {{- if .Values.hardware.enabled }}
+            # Consumed by the optical tender (postStart). See archiver-9vq/7xe.
+            - name: ONCONNECT_WITH_DISC
+              value: {{ .Values.opticalRipper.onConnectWithDisc | quote }}
+            - name: EJECT_GUARD_ENABLED
+              value: {{ .Values.opticalRipper.ejectGuard.enabled | quote }}
+            - name: EJECT_GUARD_INTERVAL
+              value: {{ .Values.opticalRipper.ejectGuard.intervalSeconds | quote }}
+            {{- end }}
           resources:
             {{- if .Values.hardware.enabled }}
             # Hardware namespace (PSS=privileged): the drive is reached via
@@ -126,6 +135,17 @@ spec:
           # dynamic enumeration order. Contained to the hardware namespace.
           securityContext:
             privileged: true
+          # postStart: background the optical tender (archiver-9vq/7xe) -- it
+          # handles a disc already loaded at connect and keeps the manual-eject
+          # button working when idle. Backgrounded via setsid so the hook
+          # returns immediately and never blocks container startup/readiness.
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - 'setsid sh /etc/optical-tender/optical-tender.sh >/home/arm/optical-tender.boot.log 2>&1 & exit 0'
           {{- end }}
           volumeMounts:
             - name: incoming
@@ -137,6 +157,9 @@ spec:
             {{- if .Values.hardware.enabled }}
             - name: host-dev
               mountPath: /dev
+            - name: optical-tender
+              mountPath: /etc/optical-tender
+              readOnly: true
             {{- end }}
           ports:
             - name: web-ui
@@ -164,5 +187,10 @@ spec:
           hostPath:
             path: /dev
             type: Directory
+        # optical tender script (archiver-9vq/7xe), run by the postStart hook.
+        - name: optical-tender
+          configMap:
+            name: {{ include "recognizer.fullname" . }}-optical-tender
+            defaultMode: 0755
         {{- end }}
 {{- end }}

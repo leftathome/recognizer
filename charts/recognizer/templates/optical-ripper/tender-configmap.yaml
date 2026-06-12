@@ -1,0 +1,72 @@
+{{- if and .Values.opticalRipper.enabled .Values.hardware.enabled }}
+# "optical tender" -- a small script the arm container runs (backgrounded) from
+# its postStart hook. It handles two things the upstream ARM image doesn't,
+# both of which only matter in the hardware namespace (privileged + hostPath
+# /dev):
+#   archiver-9vq: a disc ALREADY loaded when the drive connects emits no
+#     media-change uevent, so ARM never reacts. The tender detects it at startup
+#     and either imports it (via ARM's own pipeline, which dedupe-skips an
+#     already-ripped disc and ejects with a reason) or ejects it, per
+#     opticalRipper.onConnectWithDisc.
+#   archiver-7xe: a SCSI medium-removal lock left set by a MakeMKV probe (or an
+#     aborted rip) disables the hardware eject button. The tender clears the
+#     manual-eject inhibit at startup and, while no rip is active, on an
+#     interval -- so the button always works when the drive is idle.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "recognizer.fullname" . }}-optical-tender
+  namespace: {{ include "recognizer.hardwareNamespace" . }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: optical-ripper
+data:
+  optical-tender.sh: |
+    #!/bin/sh
+    # See the ConfigMap header. Configured via env (ONCONNECT_WITH_DISC,
+    # EJECT_GUARD_ENABLED, EJECT_GUARD_INTERVAL) set on the arm container.
+    set -u
+    DEV=/dev/sr0
+    MODE="${ONCONNECT_WITH_DISC:-import}"
+    GUARD="${EJECT_GUARD_ENABLED:-true}"
+    INTERVAL="${EJECT_GUARD_INTERVAL:-30}"
+    LOG=/home/arm/optical-tender.log
+    log() { echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') tender: $*" >>"$LOG" 2>/dev/null; }
+
+    # Media loaded -> the optical block device reports a non-zero size.
+    disc_present() { [ "$(cat /sys/block/sr0/size 2>/dev/null || echo 0)" -gt 0 ] 2>/dev/null; }
+    # eject -i off ALLOWS manual eject (clears the inhibit); it does not eject.
+    clear_inhibit() { eject -i off "$DEV" >/dev/null 2>&1 || true; }
+    # Is ARM's web (:8080 == hex 1F90) LISTENing (state 0A)? -> ARM is up.
+    arm_ready() { awk '$2 ~ /:1F90$/ && $4 == "0A" {f=1} END{exit !f}' /proc/net/tcp /proc/net/tcp6 2>/dev/null; }
+
+    log "start mode=$MODE guard=$GUARD/${INTERVAL}s"
+
+    # Always clear any stale manual-eject inhibit so the hardware button works.
+    clear_inhibit
+    log "cleared manual-eject inhibit at startup"
+
+    # onConnectWithDisc: act on a disc that was already loaded at connect.
+    if disc_present; then
+      log "disc present at startup -> $MODE"
+      if [ "$MODE" = "eject" ]; then
+        eject "$DEV" >/dev/null 2>&1 && log "ejected on connect"
+      else
+        # Wait (<=180s) for ARM to be ready before triggering its pipeline.
+        n=0; while [ "$n" -lt 90 ]; do arm_ready && break; n=$((n + 1)); sleep 2; done
+        log "import: arm_ready=$(arm_ready && echo yes || echo no); invoking wrapper"
+        /sbin/setuser arm /opt/arm/scripts/docker/docker_arm_wrapper.sh sr0 >>"$LOG" 2>&1 &
+      fi
+    else
+      log "no disc at startup"
+    fi
+
+    # Idle eject-guard: while no rip is active, keep manual eject enabled.
+    if [ "$GUARD" = "true" ]; then
+      log "eject-guard loop every ${INTERVAL}s"
+      while true; do
+        if ! pgrep -x makemkvcon >/dev/null 2>&1; then clear_inhibit; fi
+        sleep "$INTERVAL"
+      done
+    fi
+{{- end }}

@@ -172,6 +172,22 @@ opticalRipper:
   nodeSelector:
     recognizer.io/device-optical-drive: pioneer-bdr-xs07uhd
 
+  # Behavior when the drive connects with a disc ALREADY loaded. No media-change
+  # uevent fires in that case (the media was present before the device), so ARM
+  # stays idle. A postStart "optical tender" handles it. See archiver-9vq.
+  #   import -> run ARM's pipeline on the loaded disc (identify -> dedupe-skip if
+  #             already imported, ejecting with a reason -> rip if new -> eject)
+  #   eject  -> eject immediately, forcing a deliberate re-insert to import
+  onConnectWithDisc: import
+
+  # Keep the drive's physical eject button working when idle. A SCSI medium-
+  # removal lock left set by a MakeMKV probe (or an aborted rip) disables the
+  # button; the tender clears the manual-eject inhibit at startup and, while no
+  # rip is active, on an interval. See archiver-7xe.
+  ejectGuard:
+    enabled: true
+    intervalSeconds: 30
+
 # ============================================================================
 # archive-importer (spec 03): one-shot/CronJob that ingests Google Takeout
 # (and future) archives. Disabled by default for Phase D rollout; enable
