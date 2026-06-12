@@ -48,30 +48,34 @@ to the hardware ns. This single decision also unblocks udev insert/eject events
 
 ## Work breakdown
 
-- [ ] CHART: add `recognizer-hardware` namespace template + `values.hardware.*`
-      (namespace name, PSS labels enforce/audit/warn=privileged).
-- [ ] CHART: relocate optical-ripper DaemonSet + its ExternalSecrets
-      (makemkv-license, omdb-api) into the hardware ns. Render their
-      `namespace:` from `values.hardware.namespace`.
-- [ ] CHART (archiver-bms): replace the `smarter-devices/sr0`+`sg0` resource
-      requests with `securityContext.privileged: true` + hostPath `/dev` mount
-      so MakeMKV self-discovers sr0 + the dynamic sgN. Keep the NFD
-      nodeSelector. (Add hostPath `/run/udev` later for archiver-6zu.)
-- [ ] CHART: cross-namespace NFS data access — render a data PV/PVC in the
-      hardware ns bound to the same NFS export (backend=nfs path), so the
-      ripper's `/out` resolves there.
-- [ ] CHART: NetworkPolicy for the hardware ns (ripper -> notification-relay
-      in the main ns; DNS; registry).
-- [ ] GITOPS: ensure Flux creates/labels the hardware ns (PSS labels), and the
-      HelmRelease values enable `hardware.*` + keep storage.backend=nfs.
-- [ ] KEY (archiver-144, USER): purchase a permanent MakeMKV key, store at
-      Vault `eso/recognizer/makemkv` (property `license-key`). ESO syncs ->
-      Secret -> init container. No more monthly expiry.
-- [ ] VALIDATE: `helm template` + kubeconform/kubeconform-crds; confirm the
-      hardware-ns manifests render and PSS labels are present.
-- [ ] DEPLOY: merge to gitops, let Flux reconcile.
-- [ ] COLD-PLUG E2E TEST on johnny: with drive unplugged, replug -> NFD labels
-      node -> ripper schedules -> MakeMKV rips to PVC -> eject -> notifications.
+- [x] CHART: add `recognizer-hardware` namespace template + `values.hardware.*`
+      (PSS labels enforce/audit/warn=privileged). [archiver-otp]
+- [x] CHART: relocate optical-ripper DaemonSet + ConfigMap + Service +
+      ExternalSecrets into the hardware ns via `recognizer.hardwareNamespace`.
+- [x] CHART (archiver-bms): replaced `smarter-devices/sr0`+`sg0` with
+      `securityContext.privileged: true` + hostPath `/dev` so MakeMKV
+      self-discovers sr0 + the dynamic sgN. NFD nodeSelector kept. Legacy
+      (hardware.enabled=false) path still renders smarter-devices.
+- [x] CHART (archiver-ztw): `hardware.data.mode=scratch` -> throwaway RWO PVC
+      on `longhorn-single-replica` for the ripper's `/out` (NAS unavailable).
+      `mode=nfs` retained for cross-ns sharing once the NAS is cabled.
+- [x] KEY: Vault `eso/recognizer/makemkv` refreshed to the working free beta
+      key; autonomous delivery validated (no MSG:5021/5073). [archiver-144]
+- [x] VALIDATE: `helm lint --strict` + `helm template` (hardware on/off) green.
+- [ ] GITOPS (archiver-yvk): chart v0.5.0 (Chart.yaml bumped, CHANGELOG);
+      HelmRelease bumped to 0.5.0 + explicit hardware values. STAGED locally;
+      needs push + `v0.5.0` tag (CI publishes the OCI chart) + gitops push.
+- [ ] CHART: NetworkPolicy for the hardware ns (ripper -> notification-relay).
+      Deferred: chart netpols are disabled in the HelmRelease anyway, and the
+      relay is in ImagePullBackOff (node CA issue), so notifications are a
+      separate follow-up.
+- [ ] COLD-PLUG E2E TEST on johnny (archiver-e1a): drive unplugged -> replug ->
+      NFD labels node -> ripper schedules in recognizer-hardware -> MakeMKV
+      rips to the scratch PVC -> eject. (Importer hand-off + notifications
+      pending NAS + relay CA fix.)
+- [ ] SCANNER (after optical): Epson plugged into johnny now. Note: NFD
+      worker-conf deviceClassWhitelist lacks USB class 06 (Imaging), so the
+      scanner NodeFeatureRule won't fire until that's added -- verify first.
 
 ## Notes / gotchas
 

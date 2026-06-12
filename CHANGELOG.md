@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-12
+
+### Added
+
+- **Split hardware namespace (`recognizer-hardware`, archiver-6ix)** -- a
+  dedicated namespace with PSS `enforce=privileged` for hardware-attached
+  workloads, gated on `hardware.enabled` (default true). The main release
+  namespace stays PSS=restricted. New `values.hardware.*` surface
+  (`namespace`, `podSecurityStandard`, `data.*`) and a
+  `recognizer.hardwareNamespace` helper.
+- **Hardware-namespace data volume (`hardware.data`, archiver-ztw)** --
+  `mode=scratch` (default) mints a throwaway RWO PVC on the least-durable
+  StorageClass (`longhorn-single-replica`) for the relocated ripper's `/out`;
+  `mode=nfs` mints a cross-namespace NFS PV+PVC sharing `/out` with the
+  release-namespace importer (for when the NAS is available).
+
+### Changed
+
+- **`optical-ripper` device access (archiver-bms)** -- when `hardware.enabled`,
+  the ripper renders in `recognizer-hardware` with `securityContext.privileged`
+  + a hostPath `/dev` mount so MakeMKV self-discovers the optical drive and its
+  dynamically-numbered SCSI-generic node, replacing the fixed
+  `smarter-devices/sg0` claim (which never matched the drive's actual `sg`
+  node). The ConfigMap, Service, and ExternalSecrets move with it. The legacy
+  `hardware.enabled=false` path keeps the smarter-devices claims for
+  PSS=restricted single-namespace deployments.
+
 ### Added
 
 - **Walhelm health source (`cmd/walhelm-fetch`, spec 04)** -- a new content
