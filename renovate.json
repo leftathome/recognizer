@@ -1,4 +1,21 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"]
+  "extends": ["config:recommended"],
+  "packageRules": [
+    {
+      "description": "Optical-ripper (ARM) image: process bumps immediately. Each new MakeMKV release bundled by ARM resets the ~60-day beta window, so staying current keeps the ripper registered between releases. The key (permanent or rotated free beta) remains the backstop for quiet stretches >60 days -- see archiver-rmj.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["automaticrippingmachine/automatic-ripping-machine"],
+      "schedule": ["at any time"],
+      "minimumReleaseAge": "0 days",
+      "prPriority": 10
+    },
+    {
+      "description": "Automerge ARM patch+minor bumps (Flux deploys on merge). Major bumps fall through to the rule above: prompt, top-priority PR but NOT automerged -- a human gates breaking ARM upgrades on the one workload with physical hardware.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["automaticrippingmachine/automatic-ripping-machine"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true
+    }
+  ]
 }
