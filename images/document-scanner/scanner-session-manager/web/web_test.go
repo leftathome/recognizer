@@ -1,184 +1,135 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
-	"time"
 
-	"github.com/leftathome/recognizer/images/document-scanner/scanner-session-manager/session"
+	"github.com/leftathome/recognizer/images/document-scanner/scanner-session-manager/scan"
 )
 
-func setup(t *testing.T) (*Handler, *session.Manager) {
+// webMock implements scan.Commander with scripted results.
+type webMock struct {
+	results []mockResult
+	calls   [][]string
+}
+type mockResult struct {
+	Stdout []byte
+	Stderr []byte
+	Err    error
+}
+
+func (m *webMock) Run(_ context.Context, _ string, args ...string) ([]byte, []byte, error) {
+	m.calls = append(m.calls, args)
+	if len(m.results) == 0 {
+		return nil, nil, nil
+	}
+	r := m.results[0]
+	m.results = m.results[1:]
+	return r.Stdout, r.Stderr, r.Err
+}
+
+func detectOK() mockResult {
+	return mockResult{Stdout: []byte("device `epsonds:libusb:002:002' is a Epson DS-1630 ESC/I-2\n")}
+}
+
+func newTestHandler(t *testing.T, m *webMock) *Handler {
 	t.Helper()
-	mgr := session.NewManager(session.Config{
-		BaseDir:     t.TempDir(),
-		IdleTimeout: 90 * time.Second,
-	})
-	h := NewHandler(mgr, nil, "epson-ds-1630")
-	return h, mgr
+	return NewHandler(scan.New(m), t.TempDir())
 }
 
-func TestHealthz(t *testing.T) {
-	h, _ := setup(t)
-	req := httptest.NewRequest("GET", "/healthz", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
+func post(t *testing.T, h *Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/scan", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
 
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
-	if body["status"] != "ok" {
-		t.Errorf("expected ok, got %s", body["status"])
+func TestScan_InvalidResolution(t *testing.T) {
+	h := newTestHandler(t, &webMock{})
+	rec := post(t, h, `{"source":"Flatbed","mode":"Color","resolution":250}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("250 dpi (in-range, not in set) must be 400, got %d", rec.Code)
 	}
 }
 
-func TestStatus_Idle(t *testing.T) {
-	h, _ := setup(t)
-	req := httptest.NewRequest("GET", "/status", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d", w.Code)
+func TestScan_InvalidSource(t *testing.T) {
+	h := newTestHandler(t, &webMock{})
+	rec := post(t, h, `{"source":"Telepathy","mode":"Color","resolution":300}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", rec.Code)
 	}
+}
+
+func TestScan_NoDevice(t *testing.T) {
+	m := &webMock{results: []mockResult{{Stdout: []byte("No scanners were identified.\n")}}}
+	h := newTestHandler(t, m)
+	rec := post(t, h, `{"source":"Flatbed","mode":"Color","resolution":300}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("want 503, got %d", rec.Code)
+	}
+}
+
+func TestScan_FlatbedSingle(t *testing.T) {
+	m := &webMock{results: []mockResult{detectOK(), {}}} // detect, then scan ok
+	h := newTestHandler(t, m)
+	rec := post(t, h, `{"source":"Flatbed","mode":"Color","resolution":300}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var resp scanResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Pages) != 1 || resp.Pages[0].Side != "single" {
+		t.Errorf("want 1 single page, got %+v", resp.Pages)
+	}
+	if resp.Device != "epsonds:libusb:002:002" {
+		t.Errorf("want resolved device, got %q", resp.Device)
+	}
+}
+
+func TestScan_ADFDuplexLabels(t *testing.T) {
+	m := &webMock{results: []mockResult{detectOK(), {
+		Stderr: []byte("Scanned page 1.\nScanned page 2.\nDocument feeder out of documents\n"),
+		Err:    fmt.Errorf("exit status 7"),
+	}}}
+	h := newTestHandler(t, m)
+	rec := post(t, h, `{"source":"ADF Duplex","mode":"Color","resolution":300}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var resp scanResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Pages) != 2 || resp.Pages[0].Side != "front" || resp.Pages[1].Side != "back" {
+		t.Errorf("want front,back, got %+v", resp.Pages)
+	}
+}
+
+func TestScan_EmptyFeeder(t *testing.T) {
+	m := &webMock{results: []mockResult{detectOK(), {
+		Stderr: []byte("Document feeder out of documents\n"),
+		Err:    fmt.Errorf("exit status 7"),
+	}}}
+	h := newTestHandler(t, m)
+	rec := post(t, h, `{"source":"ADF Front","mode":"Gray","resolution":300}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("empty feeder want 422, got %d", rec.Code)
+	}
+}
+
+func TestStatus_DevicePresent(t *testing.T) {
+	m := &webMock{results: []mockResult{detectOK()}}
+	h := newTestHandler(t, m)
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 	var resp statusResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.State != "idle" {
-		t.Errorf("expected idle, got %s", resp.State)
-	}
-	if resp.Device != "epson-ds-1630" {
-		t.Errorf("expected epson-ds-1630, got %s", resp.Device)
-	}
-	if resp.CurrentSession != nil {
-		t.Error("expected nil current session")
-	}
-}
-
-func TestStatus_WithSession(t *testing.T) {
-	h, mgr := setup(t)
-	mgr.AddPage(session.InputFlatbed, false, "single")
-	mgr.AddPage(session.InputFlatbed, false, "single")
-
-	req := httptest.NewRequest("GET", "/status", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	var resp statusResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.State != "open" {
-		t.Errorf("expected open, got %s", resp.State)
-	}
-	if resp.CurrentSession == nil {
-		t.Fatal("expected current session")
-	}
-	if resp.CurrentSession.PageCount != 2 {
-		t.Errorf("expected 2 pages, got %d", resp.CurrentSession.PageCount)
-	}
-}
-
-func TestStatus_RecentSessions(t *testing.T) {
-	h, mgr := setup(t)
-	mgr.AddPage(session.InputADF, false, "single")
-	mgr.ADFComplete()
-
-	req := httptest.NewRequest("GET", "/status", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	var resp statusResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if len(resp.RecentSessions) != 1 {
-		t.Errorf("expected 1 recent session, got %d", len(resp.RecentSessions))
-	}
-}
-
-func TestScan_Post(t *testing.T) {
-	h, _ := setup(t)
-	req := httptest.NewRequest("POST", "/scan", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 202 {
-		t.Errorf("expected 202, got %d", w.Code)
-	}
-}
-
-func TestScan_GetNotAllowed(t *testing.T) {
-	h, _ := setup(t)
-	req := httptest.NewRequest("GET", "/scan", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 405 {
-		t.Errorf("expected 405, got %d", w.Code)
-	}
-}
-
-func TestCloseSession_NoSession(t *testing.T) {
-	h, _ := setup(t)
-	req := httptest.NewRequest("POST", "/session/close", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-	if body["status"] != "no active session" {
-		t.Errorf("expected 'no active session', got %v", body["status"])
-	}
-}
-
-func TestCloseSession_WithSession(t *testing.T) {
-	h, mgr := setup(t)
-	mgr.AddPage(session.InputFlatbed, false, "single")
-
-	req := httptest.NewRequest("POST", "/session/close", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-	if body["status"] != "session closed" {
-		t.Errorf("expected 'session closed', got %v", body["status"])
-	}
-	if mgr.State() != session.StateIdle {
-		t.Error("session should be idle after close")
-	}
-}
-
-func TestNewDocument(t *testing.T) {
-	h, mgr := setup(t)
-	mgr.AddPage(session.InputFlatbed, false, "single")
-
-	req := httptest.NewRequest("POST", "/session/new-document", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-	if body["status"] != "document boundary created" {
-		t.Errorf("expected 'document boundary created', got %v", body["status"])
-	}
-}
-
-func TestStatus_MethodNotAllowed(t *testing.T) {
-	h, _ := setup(t)
-	req := httptest.NewRequest("POST", "/status", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 405 {
-		t.Errorf("expected 405, got %d", w.Code)
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !resp.DevicePresent || resp.Device != "epsonds:libusb:002:002" {
+		t.Errorf("want present+device, got %+v", resp)
 	}
 }
