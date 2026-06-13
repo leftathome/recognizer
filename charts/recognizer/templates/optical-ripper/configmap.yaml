@@ -15,18 +15,23 @@ data:
     # it first or the loader (arm/config/config.py:36) blows up with
     # KeyError: 'INSTALLPATH'. Match the in-image install location.
     INSTALLPATH: "/opt/arm/"
-    # Lossless MakeMKV rip, NO HandBrake transcode. ARM 2.22+ split RIPMETHOD
-    # into per-media RIPMETHOD_DVD/RIPMETHOD_BR; if those are left at the
-    # template default ("PLACEHOLDER") ARM transcodes Blu-rays via HandBrake
-    # (slow, lossy). Set all three to "mkv" for archival raw rips.
+    # Lossless archival output, ARM-native (archiver-owa). With RIPMETHOD=mkv,
+    # ARM 2.23 always post-processes; USE_FFMPEG=true routes to ffmpeg_mkv ->
+    # run_transcode_cmd, which builds `ffmpeg {pre} -i src {post} out`. Setting
+    # FFMPEG_POST_FILE_ARGS to "-map 0 -c copy" makes that a STREAM COPY (remux,
+    # no re-encode): every video/audio/subtitle track is copied bit-for-bit
+    # from the MakeMKV rip into the .mkv (DEST_EXT) at COMPLETED_PATH. Lossless,
+    # fast, and done by ARM as designed (no out-of-band copy).
+    # NOTE: the old HANDBRAKE_PRESET / RIPMETHOD_DVD / RIPMETHOD_BR keys are not
+    # real ARM 2.23 config columns -- do not reintroduce them.
     RIPMETHOD: "mkv"
-    RIPMETHOD_DVD: "mkv"
-    RIPMETHOD_BR: "mkv"
+    USE_FFMPEG: true
+    FFMPEG_POST_FILE_ARGS: "-map 0 -c copy"
+    DEST_EXT: "mkv"
     EJECTENABLED: true
     JUSTMAKEISO: false
     COMPLETED_PATH: "/out/video"
     AUDIO_COMPLETED_PATH: "/out/audio"
     DATA_COMPLETED_PATH: "/out/data"
-    HANDBRAKE_PRESET: "disabled"
     NOTIFY_WEBHOOK: "{{ include "recognizer.relayUrl" . }}"
 {{- end }}

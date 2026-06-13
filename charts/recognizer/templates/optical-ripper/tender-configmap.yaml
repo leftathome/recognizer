@@ -39,6 +39,11 @@ data:
     clear_inhibit() { eject -i off "$DEV" >/dev/null 2>&1 || true; }
     # Is ARM's web (:8080 == hex 1F90) LISTENing (state 0A)? -> ARM is up.
     arm_ready() { awk '$2 ~ /:1F90$/ && $4 == "0A" {f=1} END{exit !f}' /proc/net/tcp /proc/net/tcp6 2>/dev/null; }
+    # Disc actually READABLE (spun up + TOC read), not merely present. A Blu-ray
+    # reports media present (size>0) well before it can be read, and ARM's
+    # wrapper only retries ~10x1s before giving up -- so import must wait for a
+    # real read here first (archiver-aic).
+    disc_readable() { dd if="$DEV" bs=2048 count=1 of=/dev/null >/dev/null 2>&1; }
 
     log "start mode=$MODE guard=$GUARD/${INTERVAL}s"
 
@@ -52,10 +57,17 @@ data:
       if [ "$MODE" = "eject" ]; then
         eject "$DEV" >/dev/null 2>&1 && log "ejected on connect"
       else
-        # Wait (<=180s) for ARM to be ready before triggering its pipeline.
+        # Wait (<=180s) for ARM's web to be up before triggering its pipeline.
         n=0; while [ "$n" -lt 90 ]; do arm_ready && break; n=$((n + 1)); sleep 2; done
-        log "import: arm_ready=$(arm_ready && echo yes || echo no); invoking wrapper"
-        /sbin/setuser arm /opt/arm/scripts/docker/docker_arm_wrapper.sh sr0 >>"$LOG" 2>&1 &
+        # Then wait (<=120s) for the disc to actually be READABLE (spun up), so
+        # ARM's wrapper doesn't hit "drive not ready" and bail (archiver-aic).
+        r=0; while [ "$r" -lt 60 ]; do disc_readable && break; r=$((r + 1)); sleep 2; done
+        if disc_readable; then
+          log "import: arm_ready=yes disc_readable after ${r}x2s; invoking wrapper"
+          /sbin/setuser arm /opt/arm/scripts/docker/docker_arm_wrapper.sh sr0 >>"$LOG" 2>&1 &
+        else
+          log "import: disc present but not readable after 120s; skipping (insert event will retrigger)"
+        fi
       fi
     else
       log "no disc at startup"

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-12
+
+### Fixed
+
+- **`optical-ripper` lossless output, ARM-native (archiver-owa)** -- removed the
+  obsolete/non-existent config keys (`HANDBRAKE_PRESET`, `RIPMETHOD_DVD`,
+  `RIPMETHOD_BR`) and configured ARM 2.23 to do a real lossless remux:
+  `USE_FFMPEG: true` + `FFMPEG_POST_FILE_ARGS: "-map 0 -c copy"` + `DEST_EXT: mkv`.
+  ARM rips with MakeMKV then stream-copies every track to `.mkv` in `/out` --
+  no HandBrake re-encode, no out-of-band copy.
+- **Optical tender import waits for a readable disc (archiver-aic)** -- the
+  `onConnectWithDisc=import` path now waits (<=120s) for the disc to be actually
+  readable (a real `dd` read), not just present, before invoking ARM's wrapper.
+  A Blu-ray reports media present long before it can be read, and ARM's wrapper
+  only retries ~10x1s, so it was bailing with "drive not ready".
+
 ## [0.6.0] - 2026-06-12
 
 ### Added
