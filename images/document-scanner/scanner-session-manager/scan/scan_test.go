@@ -278,3 +278,64 @@ func TestScanBatch_RealError(t *testing.T) {
 		t.Errorf("want a real (non-empty) error, got %v", err)
 	}
 }
+
+func TestScanBatch_MissingDevice(t *testing.T) {
+	s := New(&mockCommander{})
+	_, err := s.ScanBatch(context.Background(),
+		Params{Source: SourceADFFront, Mode: ModeGray, Format: FormatTIFF, Resolution: 75},
+		"/tmp/page_%02d.tiff")
+	if err == nil {
+		t.Fatal("expected error for missing device, got nil")
+	}
+	if errors.Is(err, ErrFeederEmpty) {
+		t.Errorf("missing-device error must not be ErrFeederEmpty, got %v", err)
+	}
+}
+
+func TestScanBatch_MissingBatchPattern(t *testing.T) {
+	s := New(&mockCommander{})
+	_, err := s.ScanBatch(context.Background(),
+		Params{Device: "d", Source: SourceADFFront, Mode: ModeGray, Format: FormatTIFF, Resolution: 75},
+		"")
+	if err == nil {
+		t.Fatal("expected error for missing batch pattern, got nil")
+	}
+}
+
+func TestCountScannedPages(t *testing.T) {
+	cases := []struct {
+		name   string
+		input  string
+		want   int
+	}{
+		{
+			name:  "empty input",
+			input: "",
+			want:  0,
+		},
+		{
+			name: "two scanned pages",
+			input: "Scanned page 1. (scanner status = 5)\n" +
+				"Scanned page 2. (scanner status = 5)\n",
+			want: 2,
+		},
+		{
+			name:  "only progress lines, no scanned",
+			input: "Scanning page 1\nScanning page 2\n",
+			want:  0,
+		},
+		{
+			name:  "leading whitespace before Scanned",
+			input: "  Scanned page 1.\n",
+			want:  1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := countScannedPages([]byte(tc.input))
+			if got != tc.want {
+				t.Errorf("countScannedPages(%q) = %d, want %d", tc.input, got, tc.want)
+			}
+		})
+	}
+}
