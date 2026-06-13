@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -139,4 +140,63 @@ func (s *Scanner) ScanPage(ctx context.Context, p Params) error {
 		return fmt.Errorf("scanimage failed: %w: %s", err, string(stderr))
 	}
 	return nil
+}
+
+// ErrFeederEmpty indicates an ADF scan found no documents in the feeder.
+var ErrFeederEmpty = errors.New("document feeder empty")
+
+// BuildBatchArgs returns scanimage args for an ADF batch scan. Unlike BuildArgs,
+// it uses --batch=<pattern> (a printf-style path with a %d page counter) instead
+// of --output-file.
+func BuildBatchArgs(p Params, batchPattern string) []string {
+	return []string{
+		"--device-name", p.Device,
+		"--resolution", fmt.Sprintf("%d", p.Resolution),
+		"--mode", string(p.Mode),
+		"--source", string(p.Source),
+		"--format", string(p.Format),
+		fmt.Sprintf("--batch=%s", batchPattern),
+	}
+}
+
+// countScannedPages counts "Scanned page N" progress lines in scanimage stderr.
+func countScannedPages(stderr []byte) int {
+	n := 0
+	sc := bufio.NewScanner(bytes.NewReader(stderr))
+	for sc.Scan() {
+		if strings.HasPrefix(strings.TrimSpace(sc.Text()), "Scanned page") {
+			n++
+		}
+	}
+	return n
+}
+
+// ScanBatch runs an ADF batch scan, writing pages to batchPattern. It returns the
+// number of pages scanned. scanimage signals both end-of-feed and empty-feeder with
+// a non-nil error whose stderr contains "out of documents"; this is end-of-feed when
+// >=1 page was produced, and ErrFeederEmpty when 0 were. Any other error is real.
+//
+// The count is derived from "Scanned page N" stderr lines (one per file scanimage
+// writes); this assumes default --batch numbering from 1, so the handler can
+// reconstruct page_01..page_NN filenames without touching the filesystem (keeps it
+// unit-testable through the Commander mock).
+func (s *Scanner) ScanBatch(ctx context.Context, p Params, batchPattern string) (int, error) {
+	if p.Device == "" {
+		return 0, fmt.Errorf("device is required")
+	}
+	if batchPattern == "" {
+		return 0, fmt.Errorf("batch pattern is required")
+	}
+	_, stderr, err := s.cmd.Run(ctx, "scanimage", BuildBatchArgs(p, batchPattern)...)
+	count := countScannedPages(stderr)
+	if err != nil {
+		if bytes.Contains(stderr, []byte("out of documents")) {
+			if count == 0 {
+				return 0, ErrFeederEmpty
+			}
+			return count, nil // normal end-of-feed
+		}
+		return count, fmt.Errorf("scanimage --batch failed: %w: %s", err, string(stderr))
+	}
+	return count, nil
 }
