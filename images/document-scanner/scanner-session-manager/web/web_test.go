@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -131,5 +132,98 @@ func TestStatus_DevicePresent(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	if !resp.DevicePresent || resp.Device != "epsonds:libusb:002:002" {
 		t.Errorf("want present+device, got %+v", resp)
+	}
+}
+
+func TestScan_InvalidMode(t *testing.T) {
+	h := newTestHandler(t, &webMock{})
+	rec := post(t, h, `{"source":"Flatbed","mode":"Sepia","resolution":300}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid mode want 400, got %d", rec.Code)
+	}
+}
+
+func TestScan_MalformedBody(t *testing.T) {
+	h := newTestHandler(t, &webMock{})
+	rec := post(t, h, `not json`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("malformed JSON want 400, got %d", rec.Code)
+	}
+}
+
+func TestScan_WrongMethod(t *testing.T) {
+	h := newTestHandler(t, &webMock{})
+	req := httptest.NewRequest(http.MethodGet, "/scan", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET /scan want 405, got %d", rec.Code)
+	}
+}
+
+func TestStatus_WrongMethod(t *testing.T) {
+	h := newTestHandler(t, &webMock{})
+	req := httptest.NewRequest(http.MethodPost, "/status", strings.NewReader(""))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /status want 405, got %d", rec.Code)
+	}
+}
+
+func TestScan_ADFBatchError500(t *testing.T) {
+	m := &webMock{results: []mockResult{
+		detectOK(),
+		{Stderr: []byte("scanimage: open failed: Invalid argument\n"), Err: fmt.Errorf("exit status 1")},
+	}}
+	h := newTestHandler(t, m)
+	rec := post(t, h, `{"source":"ADF Front","mode":"Gray","resolution":300}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("non-feeder ADF error want 500, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHealthz(t *testing.T) {
+	h := newTestHandler(t, &webMock{})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("/healthz want 200, got %d", rec.Code)
+	}
+}
+
+func TestStatus_DeviceAbsent(t *testing.T) {
+	m := &webMock{results: []mockResult{{Stdout: []byte("No scanners were identified.\n")}}}
+	h := newTestHandler(t, m)
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var resp statusResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.DevicePresent {
+		t.Errorf("want device_present:false, got %+v", resp)
+	}
+}
+
+func TestScan_EmptyFeeder_Cleanup(t *testing.T) {
+	m := &webMock{results: []mockResult{detectOK(), {
+		Stderr: []byte("Document feeder out of documents\n"),
+		Err:    fmt.Errorf("exit status 7"),
+	}}}
+	tmpDir := t.TempDir()
+	h := NewHandler(scan.New(m), tmpDir)
+	req := httptest.NewRequest(http.MethodPost, "/scan", strings.NewReader(`{"source":"ADF Front","mode":"Gray","resolution":300}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", rec.Code)
+	}
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("want no leftover dirs after 422, found %d: %v", len(entries), entries)
 	}
 }

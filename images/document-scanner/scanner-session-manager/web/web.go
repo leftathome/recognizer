@@ -119,6 +119,7 @@ func (h *Handler) handleScan(w http.ResponseWriter, r *http.Request) {
 	if req.Source == "Flatbed" {
 		params.OutputPath = filepath.Join(dir, "page_01.tiff")
 		if err := h.scanner.ScanPage(ctx, params); err != nil {
+			os.RemoveAll(dir)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -134,9 +135,11 @@ func (h *Handler) handleScan(w http.ResponseWriter, r *http.Request) {
 	count, err := h.scanner.ScanBatch(ctx, params, pattern)
 	if err != nil {
 		if errors.Is(err, scan.ErrFeederEmpty) {
+			os.RemoveAll(dir)
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "feeder empty"})
 			return
 		}
+		os.RemoveAll(dir)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -162,8 +165,11 @@ func (h *Handler) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *Handler) makeOutputDir() (string, error) {
+	if err := os.MkdirAll(h.outputBase, 0o755); err != nil {
+		return "", err
+	}
 	dir := filepath.Join(h.outputBase, generateID())
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.Mkdir(dir, 0o755); err != nil {
 		return "", err
 	}
 	return dir, nil
