@@ -702,7 +702,7 @@ git commit -m "build(scanner): drop imagemagick from driver image (processor con
 
 Reference the working pattern in `charts/recognizer/templates/optical-ripper/daemonset.yaml` for exact gating syntax.
 
-- [ ] **Step 1: configmap.yaml + service.yaml namespace**
+- [x] **Step 1: configmap.yaml + service.yaml namespace**
 
 In each, change `namespace: {{ .Release.Namespace }}` to:
 ```yaml
@@ -711,7 +711,7 @@ In each, change `namespace: {{ .Release.Namespace }}` to:
 
 While in `configmap.yaml`, prune now-dead keys: the new env-only `main.go` reads none of the configmap (it's mounted at `/etc/scanner` but unused), so drop stale entries like `idle_timeout_seconds`, `device_name`, `relay_url`. Leave the configmap (and its mount) in place only if it still carries something live; otherwise it's harmless dead config — pruning is preferred but not blocking.
 
-- [ ] **Step 2: daemonset.yaml**
+- [x] **Step 2: daemonset.yaml**
 
 Change the `metadata.namespace` line the same way. Then, on the single container, add a privileged securityContext and a `/dev` mount, and add the hostPath volume — **all gated on `hardware.enabled`** (the namespace helper handles the legacy fallback on its own). Container spec gains:
 
@@ -738,11 +738,11 @@ and in the pod `volumes`:
         {{- end }}
 ```
 
-- [ ] **Step 3: values.yaml** — remove the dead `smarter-devices/bus-usb` limit from `documentScanner.resources.limits` (delete the comment block + the `smarter-devices/bus-usb: 1` line). The `limits` block becomes just `cpu`/`memory`.
+- [x] **Step 3: values.yaml** — remove the dead `smarter-devices/bus-usb` limit from `documentScanner.resources.limits` (delete the comment block + the `smarter-devices/bus-usb: 1` line). The `limits` block becomes just `cpu`/`memory`.
 
   > **Deviation from spec §4.1 (intentional):** the spec suggested mirroring optical-ripper by *conditionally re-adding* a `smarter-devices` limit under `hardware.enabled=false`. We drop it unconditionally instead: that per-device USB resource name never matched anyway (it's dynamically numbered), so legacy-mode USB passthrough is non-functional regardless, and `hardware.enabled` defaults true. Simpler and the acceptance criteria don't exercise legacy mode.
 
-- [ ] **Step 4: Verify renders (hardware.enabled=true)**
+- [x] **Step 4: Verify renders (hardware.enabled=true)**
 
 ```bash
 cd /mnt/c/Users/steve/Code/recognizer
@@ -755,7 +755,7 @@ Expected: `namespace: recognizer-hardware`, `privileged: true`, `path: /dev` all
 helm template r charts/recognizer --namespace recognizer --kube-version 1.34.0 --show-only templates/document-scanner/daemonset.yaml | grep smarter-devices || echo "no smarter-devices (correct)"
 ```
 
-- [ ] **Step 5: Verify renders (hardware.enabled=false — PSS-restricted safe)**
+- [x] **Step 5: Verify renders (hardware.enabled=false — PSS-restricted safe)**
 
 ```bash
 helm template r charts/recognizer --namespace recognizer --kube-version 1.34.0 --set hardware.enabled=false \
@@ -765,7 +765,7 @@ helm lint charts/recognizer
 ```
 Expected: no privileged/`/dev` in legacy mode; `helm lint` passes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add charts/recognizer/templates/document-scanner/ charts/recognizer/values.yaml
