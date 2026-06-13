@@ -3,16 +3,13 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "recognizer.fullname" . }}-scanner-config
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "recognizer.hardwareNamespace" . }}
   labels:
     {{- include "recognizer.labels" . | nindent 4 }}
     app.kubernetes.io/component: document-scanner
-data:
-  config.yaml: |
-    idle_timeout_seconds: 90
-    relay_url: "http://notification-relay.capture.svc.cluster.local:8080/event"
-    scan_resolution: 600
-    scan_color_mode: "Color"
-    scan_format: "tiff"
-    device_name: "epson-ds-1630"
+# The stateless env-only driver (Slice 1) reads no configmap keys;
+# all former keys (idle_timeout_seconds, device_name, relay_url, etc.)
+# were pruned. The configmap and its daemonset mount are kept so future
+# slices can add live config without a chart restructure.
+data: {}
 {{- end }}

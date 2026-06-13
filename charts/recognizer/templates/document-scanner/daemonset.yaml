@@ -3,7 +3,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: {{ include "recognizer.fullname" . }}-document-scanner
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "recognizer.hardwareNamespace" . }}
   labels:
     {{- include "recognizer.labels" . | nindent 4 }}
     app.kubernetes.io/component: document-scanner
@@ -31,11 +31,21 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           resources:
             {{- toYaml .Values.documentScanner.resources | nindent 12 }}
+          {{- if .Values.hardware.enabled }}
+          # Privileged + hostPath /dev so SANE/scanimage sees the USB scanner
+          # regardless of dynamic bus enumeration. Contained to the hardware namespace.
+          securityContext:
+            privileged: true
+          {{- end }}
           volumeMounts:
             - name: incoming
               mountPath: /out
             - name: scanner-config
               mountPath: /etc/scanner
+            {{- if .Values.hardware.enabled }}
+            - name: host-dev
+              mountPath: /dev
+            {{- end }}
           ports:
             - name: web-ui
               containerPort: 8080
@@ -46,4 +56,13 @@ spec:
         - name: scanner-config
           configMap:
             name: {{ include "recognizer.fullname" . }}-scanner-config
+        {{- if .Values.hardware.enabled }}
+        # Host device tree so scanimage sees the USB scanner at /dev/bus/usb/...
+        # Requires the privileged securityContext above and the relaxed PSS on
+        # the hardware namespace.
+        - name: host-dev
+          hostPath:
+            path: /dev
+            type: Directory
+        {{- end }}
 {{- end }}
