@@ -29,6 +29,11 @@ spec:
         - name: scanner
           image: {{ include "recognizer.image" (dict "root" $ "name" .Values.documentScanner.image.name "tag" .Values.documentScanner.image.tag) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # No smarter-devices/* claims: the USB scanner is reached via the hostPath
+          # /dev mount below (gated on hardware.enabled), not a fixed device resource.
+          # NOTE: this workload only functions with hardware.enabled=true. Unlike
+          # optical-ripper, there is no smarter-devices fallback in the legacy
+          # (hardware.enabled=false) path -- a disabled-hardware render is inert.
           resources:
             {{- toYaml .Values.documentScanner.resources | nindent 12 }}
           {{- if .Values.hardware.enabled }}
