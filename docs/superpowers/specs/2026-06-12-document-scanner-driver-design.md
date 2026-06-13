@@ -179,7 +179,7 @@ This keys behavior on stderr text + produced-file count, both drivable by the mo
 | No device found (`DetectDevice` fails) | `503 {"error":"scanner not found"}` |
 | ADF source, empty feeder ("out of documents" + 0 files) | `422 {"error":"feeder empty"}` |
 | Invalid source/mode/resolution | `400 {"error":"..."}` |
-| `scanimage` failure (other stderr) | `500 {"error": "...", "stderr": "..."}` |
+| `scanimage` failure (other stderr) | `500 {"error": "..."}` — the message embeds the underlying scanimage stderr. A discrete structured `stderr` field is deferred to Slice 2, when the processor actually consumes it. |
 | Long ADF batch | generous, **configurable** scan timeout (env, minutes-scale) |
 
 ### 4.5 Testing
