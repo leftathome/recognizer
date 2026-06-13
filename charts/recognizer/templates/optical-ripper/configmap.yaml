@@ -28,6 +28,17 @@ data:
     USE_FFMPEG: true
     FFMPEG_POST_FILE_ARGS: "-map 0 -c copy"
     DEST_EXT: "mkv"
+    # Title length filter (seconds), applied at the OUTPUT stage (ffmpeg.py /
+    # handbrake.py): tracks outside [MINLENGTH, MAXLENGTH] are not written to
+    # COMPLETED_PATH. MINLENGTH=600 drops trailers/menus/short extras.
+    # MAXLENGTH=12600 (3.5h) drops a TV box-set "Play All" title (e.g. a 9x25min
+    # disc concatenated to ~3.75h) so the archive holds the individual episodes,
+    # not a redundant whole-disc dupe. NOTE: length-only -- a movie longer than
+    # 3.5h (rare extended editions) would also be skipped; raise per-disc if so.
+    # MakeMKV still RIPS the Play-All to scratch (it only filters the /out copy);
+    # ARM's "all" rip has no max-length passthrough to MakeMKV. See archiver-owa.
+    MINLENGTH: "600"
+    MAXLENGTH: "12600"
     EJECTENABLED: true
     JUSTMAKEISO: false
     COMPLETED_PATH: "/out/video"
