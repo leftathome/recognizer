@@ -26,6 +26,11 @@ data:
     # real ARM 2.23 config columns -- do not reintroduce them.
     RIPMETHOD: "mkv"
     USE_FFMPEG: true
+    # ARM's template ships FFMPEG_CLI: "FFMPEG" as a placeholder; left unset,
+    # ARM execs a nonexistent "FFMPEG" and the remux dies with
+    # FileNotFoundError (job fails AFTER a full rip). Point it at the real
+    # binary (/usr/bin/ffmpeg in the ARM image).
+    FFMPEG_CLI: "/usr/bin/ffmpeg"
     FFMPEG_POST_FILE_ARGS: "-map 0 -c copy"
     DEST_EXT: "mkv"
     # Title length filter (seconds), applied at the OUTPUT stage (ffmpeg.py /

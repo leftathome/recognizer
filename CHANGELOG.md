@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-06-13
+
+### Fixed
+
+- **`optical-ripper` ffmpeg remux actually runs (archiver-owa)** -- set
+  `FFMPEG_CLI: "/usr/bin/ffmpeg"`. ARM's template leaves it as the placeholder
+  `"FFMPEG"`, so with `USE_FFMPEG: true` the lossless remux died with
+  `FileNotFoundError: 'FFMPEG'` *after* a full rip (job failed, nothing in
+  `/out`). With the real binary, ARM stream-copies (`-map 0 -c copy`) the
+  MakeMKV rip to lossless `.mkv` in `/out` as designed.
+
+### Added
+
+- **Title-length cap (`MAXLENGTH: 12600`)** -- drops a TV box-set "Play All"
+  title (>3.5h) from the archive output while keeping episodes and movies
+  <=3.5h. Length-only; raise per-disc for rare longer movies.
+
 ## [0.6.1] - 2026-06-12
 
 ### Fixed

@@ -2,8 +2,8 @@ apiVersion: v2
 name: recognizer
 description: Homelab archiver -- document scanners, optical rippers, notification relay
 type: application
-version: 0.6.1
-appVersion: "0.6.1"
+version: 0.6.2
+appVersion: "0.6.2"
 kubeVersion: ">=1.30.0-0"
 maintainers:
   - name: Steve Wagner
