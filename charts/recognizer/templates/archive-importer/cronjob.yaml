@@ -28,6 +28,7 @@ spec:
             {{- include "recognizer.labels" . | nindent 12 }}
             app.kubernetes.io/component: archive-importer
         spec:
+          automountServiceAccountToken: false
           serviceAccountName: {{ include "recognizer.fullname" . }}-archive-importer
           restartPolicy: Never
           nodeSelector:

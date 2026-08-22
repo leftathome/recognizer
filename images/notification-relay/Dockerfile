@@ -12,4 +12,6 @@ ENV CAPTURE_SCHEMA_DIR=/schemas
 
 EXPOSE 8080
 
+USER 1000:1000
+
 CMD ["python", "-m", "relay.main"]

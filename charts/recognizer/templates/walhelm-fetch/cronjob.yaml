@@ -27,6 +27,7 @@ spec:
             {{- include "recognizer.labels" . | nindent 12 }}
             app.kubernetes.io/component: walhelm-fetch
         spec:
+          automountServiceAccountToken: false
           serviceAccountName: {{ include "recognizer.fullname" . }}-walhelm-fetch
           restartPolicy: Never
           nodeSelector:

@@ -19,6 +19,7 @@ spec:
         {{- include "recognizer.labels" . | nindent 8 }}
         app.kubernetes.io/component: optical-ripper
     spec:
+      automountServiceAccountToken: false
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

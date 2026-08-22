@@ -20,6 +20,7 @@ spec:
         {{- include "recognizer.labels" . | nindent 8 }}
         app.kubernetes.io/component: notification-relay
     spec:
+      automountServiceAccountToken: false
       # Pin to amd64: the kaniko CI build is single-arch (amd64 only),
       # so on arm64 nodes the container crashes with
       # 'exec /usr/local/bin/python: exec format error'. Lift this
@@ -32,10 +33,22 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: relay
           image: {{ include "recognizer.image" (dict "root" $ "name" .Values.notificationRelay.image.name "tag" .Values.notificationRelay.image.tag) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 8080
