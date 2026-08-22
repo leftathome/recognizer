@@ -171,4 +171,4 @@ discrepancy"):
 - [ ] Coordinate with the glovebox operator before their Vault `tlsSkipVerify` flip (confirm `caSecret`).
 - [ ] Register walhelm subject principals glovebox-side before `subjects.json` enforcement turns on (`archiver-vry`).
 - [ ] Design the `archive/recognizer-scan` producer (source-id `recognizer-scanner`, `ocr.txt` at tar root) with fail-closed finalize in mind — blocked on the scanner actually working (see architecture review §3).
-- [ ] File the three upstream issues in §6 (needs user/operator sign-off; outward-facing).
+- [x] File the three upstream issues in §6 — filed 2026-08-22 with sign-off: **glovebox#65** (handoff-doc drift), **glovebox#69** (no `producer` cert template), **glovebox#70** (mTLS client mount-path doc/chart mismatch).
