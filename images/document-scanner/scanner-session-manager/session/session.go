@@ -161,6 +161,18 @@ func (m *Manager) AddPage(method InputMethod, duplex bool, side string) (sess *S
 	return s, filename
 }
 
+// RemoveLastPage drops the most recently added page from the current
+// session, e.g. after a physical scan attempt failed and no file was
+// actually written. No-op if idle or the session has no pages.
+func (m *Manager) RemoveLastPage() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.current == nil || len(m.current.Pages) == 0 {
+		return
+	}
+	m.current.Pages = m.current.Pages[:len(m.current.Pages)-1]
+}
+
 // CloseSession closes the current session. No-op if idle.
 func (m *Manager) CloseSession() *Session {
 	m.mu.Lock()

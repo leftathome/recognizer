@@ -1,13 +1,57 @@
 package web
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/leftathome/recognizer/images/document-scanner/scanner-session-manager/scan"
 	"github.com/leftathome/recognizer/images/document-scanner/scanner-session-manager/session"
 )
+
+// fakeCommander is a minimal scan.Commander fake for web package tests
+// (the scan package's own mockCommander is unexported and lives in a
+// different package).
+type fakeCommander struct {
+	calls    []string
+	failScan bool
+	devices  string // stdout for `scanimage -f '%d%n'`
+}
+
+func (f *fakeCommander) Run(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
+	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	for _, a := range args {
+		if a == "-f" {
+			return []byte(f.devices), nil, nil
+		}
+	}
+	if f.failScan {
+		return nil, []byte("scanimage: no paper in ADF\n"), fmt.Errorf("exit status 7")
+	}
+	// Simulate scanimage writing the output file so manifest.Build (tested
+	// elsewhere) would find it.
+	for i, a := range args {
+		if a == "--output-file" && i+1 < len(args) {
+			_ = os.WriteFile(args[i+1], []byte("fake tiff bytes"), 0o644)
+		}
+	}
+	return nil, nil, nil
+}
+
+func defaultSettings() ScanSettings {
+	return ScanSettings{
+		ResolutionDPI: 600,
+		ColorMode:     scan.ModeColor,
+		Format:        scan.FormatTIFF,
+	}
+}
 
 func setup(t *testing.T) (*Handler, *session.Manager) {
 	t.Helper()
@@ -15,7 +59,8 @@ func setup(t *testing.T) (*Handler, *session.Manager) {
 		BaseDir:     t.TempDir(),
 		IdleTimeout: 90 * time.Second,
 	})
-	h := NewHandler(mgr, nil, "epson-ds-1630")
+	scanner := scan.New(&fakeCommander{})
+	h := NewHandler(mgr, scanner, "epson-ds-1630", defaultSettings())
 	return h, mgr
 }
 
@@ -96,13 +141,126 @@ func TestStatus_RecentSessions(t *testing.T) {
 }
 
 func TestScan_Post(t *testing.T) {
-	h, _ := setup(t)
+	h, mgr := setup(t)
 	req := httptest.NewRequest("POST", "/scan", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
-	if w.Code != 202 {
-		t.Errorf("expected 202, got %d", w.Code)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["status"] != "scan complete" {
+		t.Errorf("status: got %v", body["status"])
+	}
+	if body["filename"] != "page_001.tiff" {
+		t.Errorf("filename: got %v", body["filename"])
+	}
+	if body["side"] != "single" {
+		t.Errorf("side: got %v", body["side"])
+	}
+	if body["input_method"] != "flatbed" {
+		t.Errorf("input_method: got %v", body["input_method"])
+	}
+
+	sess := mgr.Current()
+	if sess == nil || len(sess.Pages) != 1 {
+		t.Fatalf("expected 1 page in current session, got %+v", sess)
+	}
+	if _, err := os.Stat(filepath.Join(sess.OutputDir, "page_001.tiff")); err != nil {
+		t.Errorf("expected scanned file to exist: %v", err)
+	}
+}
+
+func TestScan_ADFDuplexRequestsCorrectSource(t *testing.T) {
+	h, mgr := setup(t)
+	body := bytes.NewBufferString(`{"input_method":"adf","duplex":true,"side":"front"}`)
+	req := httptest.NewRequest("POST", "/scan", body)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	sess := mgr.Current()
+	if sess == nil || sess.InputMethod != session.InputADF || !sess.Duplex {
+		t.Fatalf("expected open ADF duplex session, got %+v", sess)
+	}
+	if sess.Pages[0].Side != "front" {
+		t.Errorf("side: got %q, want front", sess.Pages[0].Side)
+	}
+}
+
+func TestScan_InvalidInputMethod(t *testing.T) {
+	h, _ := setup(t)
+	body := bytes.NewBufferString(`{"input_method":"carrier-pigeon"}`)
+	req := httptest.NewRequest("POST", "/scan", body)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestScan_ScannerErrorMapsTo502(t *testing.T) {
+	mgr := session.NewManager(session.Config{BaseDir: t.TempDir(), IdleTimeout: 90 * time.Second})
+	scanner := scan.New(&fakeCommander{failScan: true})
+	h := NewHandler(mgr, scanner, "epson-ds-1630", defaultSettings())
+
+	req := httptest.NewRequest("POST", "/scan", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != 502 {
+		t.Fatalf("expected 502, got %d: %s", w.Code, w.Body.String())
+	}
+	// The failed page must not linger in the session (it would otherwise
+	// break manifest building on close, since no file was written for it).
+	if sess := mgr.Current(); sess != nil && len(sess.Pages) != 0 {
+		t.Errorf("expected failed page to be removed, got %d pages", len(sess.Pages))
+	}
+}
+
+func TestScan_DeviceUnavailableMapsTo503(t *testing.T) {
+	mgr := session.NewManager(session.Config{BaseDir: t.TempDir(), IdleTimeout: 90 * time.Second})
+	// No device override and scanimage -f reports nothing -> auto-detect fails.
+	scanner := scan.New(&fakeCommander{devices: ""})
+	h := NewHandler(mgr, scanner, "", defaultSettings())
+
+	req := httptest.NewRequest("POST", "/scan", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != 503 {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestScan_AutoDetectsDeviceWhenNoOverride(t *testing.T) {
+	mgr := session.NewManager(session.Config{BaseDir: t.TempDir(), IdleTimeout: 90 * time.Second})
+	scanner := scan.New(&fakeCommander{devices: "epsonscan2:DS-1630:usb:04b8:0154\n"})
+	h := NewHandler(mgr, scanner, "", defaultSettings())
+
+	req := httptest.NewRequest("POST", "/scan", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// /status should now report the auto-detected device.
+	statusReq := httptest.NewRequest("GET", "/status", nil)
+	statusW := httptest.NewRecorder()
+	h.ServeHTTP(statusW, statusReq)
+	var resp statusResponse
+	json.Unmarshal(statusW.Body.Bytes(), &resp)
+	if resp.Device != "epsonscan2:DS-1630:usb:04b8:0154" {
+		t.Errorf("expected auto-detected device in status, got %q", resp.Device)
 	}
 }
 
