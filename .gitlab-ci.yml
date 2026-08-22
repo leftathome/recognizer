@@ -70,7 +70,7 @@ test:python:
 
 test:go:
   stage: test
-  image: golang:1.26.3-bookworm
+  image: golang:1.26.4-bookworm
   extends: .cache
   variables:
     GO_MODULE_DIR: images/document-scanner/scanner-session-manager
@@ -95,7 +95,7 @@ test:go:
 
 vuln:go:
   stage: test
-  image: golang:1.26.3-bookworm
+  image: golang:1.26.4-bookworm
   extends: .cache
   variables:
     GO_MODULE_DIR: images/document-scanner/scanner-session-manager
@@ -127,11 +127,13 @@ test:go:archive-importer:
     # !reference pulls in test:go's hook before our additions.
     - !reference [test:go, before_script]
     # Manifest writer's TestWrite_ProducesSchemaValidJSON shells out to
-    # `python3 -m jsonschema`. The golang:1.26.3-bookworm image has
-    # python3 but not the pip package; install it here. (The test soft-
-    # skips if the import fails, but we want it actually running in CI.)
-    - apt-get update && apt-get install -y --no-install-recommends python3-pip
-    - pip install --break-system-packages jsonschema
+    # `python3 -m jsonschema`. The golang:1.26.4-bookworm image has
+    # python3 but not the package. Install Debian's python3-jsonschema
+    # via apt (Debian mirror, runner CA-safe) instead of pip: pip hits
+    # pypi.org over TLS the runner can't verify (archiver-850, same
+    # orac-CA theme as gitops-gr30) and blocked the v0.5.0 release.
+    # (The test soft-skips if the import fails, but we want it running.)
+    - apt-get update && apt-get install -y --no-install-recommends python3-jsonschema
 
 vuln:go:archive-importer:
   extends: vuln:go
