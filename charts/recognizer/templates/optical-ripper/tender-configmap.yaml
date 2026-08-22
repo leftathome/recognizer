@@ -45,6 +45,29 @@ data:
     # real read here first (archiver-aic).
     disc_readable() { dd if="$DEV" bs=2048 count=1 of=/dev/null >/dev/null 2>&1; }
 
+    # archiver-9xw: best-effort disc-detected/disc-ejected notification. Posts
+    # a schema-valid v1.1 event (schemas/notification-event.v1.1.schema.json)
+    # to NOTIFY_WEBHOOK -- the same in-cluster notification-relay ARM's own
+    # arm.yaml NOTIFY_WEBHOOK key points at. These two event_types fire before
+    # any rip output exists, so the v1.1 schema excuses them from the usual
+    # output_path/media_type requirement. Strictly non-fatal: skipped entirely
+    # when NOTIFY_WEBHOOK is unset/empty, and curl failure/timeout never
+    # affects the tender (short 5s cap, || true).
+    notify_event() {
+      [ -n "${NOTIFY_WEBHOOK:-}" ] || return 0
+      _evt="$1"
+      _ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      # blkid reads the volume label from what's already-cached filesystem
+      # metadata -- cheap, no TOC/full-disc scan -- so it's fine to call it
+      # right at detection time; strip stray quotes/backslashes so a weird
+      # label can't break the hand-built JSON below.
+      _label="$(blkid -s LABEL -o value "$DEV" 2>/dev/null | tr -d '"\\')"
+      if [ -n "$_label" ]; then _label_json="\"$_label\""; else _label_json="null"; fi
+      _payload="{\"schema_version\":\"1.1\",\"source\":\"optical-ripper\",\"event_type\":\"$_evt\",\"timestamp\":\"$_ts\",\"node_name\":\"${NODE_NAME:-}\",\"metadata\":{\"source_device\":\"pioneer-bdr-xs07uhd\",\"disc_label\":$_label_json}}"
+      curl -s -m 5 -H 'Content-Type: application/json' -d "$_payload" "$NOTIFY_WEBHOOK" >/dev/null 2>&1 || true
+      log "notify_event $_evt"
+    }
+
     log "start mode=$MODE guard=$GUARD/${INTERVAL}s"
 
     # Always clear any stale manual-eject inhibit so the hardware button works.
@@ -54,8 +77,9 @@ data:
     # onConnectWithDisc: act on a disc that was already loaded at connect.
     if disc_present; then
       log "disc present at startup -> $MODE"
+      notify_event disc-detected
       if [ "$MODE" = "eject" ]; then
-        eject "$DEV" >/dev/null 2>&1 && log "ejected on connect"
+        eject "$DEV" >/dev/null 2>&1 && log "ejected on connect" && notify_event disc-ejected
       else
         # Wait (<=180s) for ARM's web to be up before triggering its pipeline.
         n=0; while [ "$n" -lt 90 ]; do arm_ready && break; n=$((n + 1)); sleep 2; done

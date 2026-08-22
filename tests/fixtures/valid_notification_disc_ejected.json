@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.1",
+  "source": "optical-ripper",
+  "event_type": "disc-ejected",
+  "timestamp": "2026-04-04T18:41:05Z",
+  "metadata": {
+    "source_device": "pioneer-bdr-xs07uhd"
+  },
+  "node_name": "k8s-node-02"
+}

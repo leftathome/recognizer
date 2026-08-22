@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.1",
+  "source": "optical-ripper",
+  "event_type": "disc-detected",
+  "timestamp": "2026-04-04T18:29:40Z",
+  "metadata": {
+    "source_device": "pioneer-bdr-xs07uhd",
+    "disc_label": "MOVIE_TITLE"
+  },
+  "node_name": "k8s-node-02",
+  "surprise_field": "should not be here"
+}

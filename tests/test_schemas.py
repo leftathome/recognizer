@@ -20,6 +20,11 @@ def notification_schema():
 
 
 @pytest.fixture(scope="module")
+def notification_schema_v11():
+    return load_json(os.path.join(SCHEMAS_DIR, "notification-event.v1.1.schema.json"))
+
+
+@pytest.fixture(scope="module")
 def manifest_schema():
     return load_json(os.path.join(SCHEMAS_DIR, "scan-session-manifest.v1.schema.json"))
 
@@ -127,3 +132,41 @@ def test_notification_metadata_extra_field_rejected(notification_schema):
     doc = _mutated("valid_notification_optical.json", **{"metadata.extra": "nope"})
     with pytest.raises(ValidationError):
         validate(instance=doc, schema=notification_schema, cls=Draft202012Validator)
+
+
+# -- disc-detected / disc-ejected (v1.1 only, bead archiver-9xw) --
+#
+# These two event_types fire before any rip output exists, so v1.1's
+# `allOf` conditional excuses them (and only them) from the
+# output_path/media_type requirement. They only validate against the
+# v1.1 schema -- v1.0 doesn't know about them.
+
+def test_valid_disc_detected_accepted(notification_schema_v11):
+    doc = load_json(os.path.join(FIXTURES_DIR, "valid_notification_disc_detected.json"))
+    validate(instance=doc, schema=notification_schema_v11, cls=Draft202012Validator)
+
+
+def test_valid_disc_ejected_accepted(notification_schema_v11):
+    doc = load_json(os.path.join(FIXTURES_DIR, "valid_notification_disc_ejected.json"))
+    validate(instance=doc, schema=notification_schema_v11, cls=Draft202012Validator)
+
+
+def test_disc_detected_extra_field_rejected(notification_schema_v11):
+    doc = load_json(
+        os.path.join(FIXTURES_DIR, "invalid_notification_disc_detected_extra_field.json")
+    )
+    with pytest.raises(ValidationError) as exc_info:
+        validate(instance=doc, schema=notification_schema_v11, cls=Draft202012Validator)
+    assert "Additional properties are not allowed" in str(exc_info.value)
+
+
+def test_existing_event_type_still_requires_output_path(notification_schema_v11):
+    """Regression guard: the disc-detected/disc-ejected conditional must not
+    loosen requirements for pre-existing event types. disc-extraction-complete
+    (present since v1.0) must still require output_path against the v1.1
+    schema exactly as it did before the archiver-9xw addition."""
+    doc = load_json(os.path.join(FIXTURES_DIR, "valid_notification_optical.json"))
+    del doc["output_path"]
+    with pytest.raises(ValidationError) as exc_info:
+        validate(instance=doc, schema=notification_schema_v11, cls=Draft202012Validator)
+    assert "'output_path' is a required property" in str(exc_info.value)
