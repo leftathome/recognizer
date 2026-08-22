@@ -11,15 +11,6 @@ import (
 	"strings"
 )
 
-// Status represents the scanner's current state.
-type Status string
-
-const (
-	StatusIdle     Status = "idle"
-	StatusScanning Status = "scanning"
-	StatusError    Status = "error"
-)
-
 // ScanMode represents SANE color modes.
 type ScanMode string
 
@@ -63,39 +54,6 @@ func DefaultParams() Params {
 		Mode:       ModeColor,
 		Source:     SourceFlatbed,
 		Format:     FormatTIFF,
-	}
-}
-
-// Standard US Letter page dimensions in inches. Phase 1 only scans
-// letter-size documents (see architecture-implementation-review.md); actual
-// per-page pixel measurement (e.g. decoding the written TIFF) is deferred to
-// the driver/processor split (C7).
-const (
-	pageWidthIn  = 8.5
-	pageHeightIn = 11.0
-)
-
-// StandardPageDimensions returns the expected pixel width/height of a
-// US-Letter page scanned at resolutionDPI, for manifest building.
-func StandardPageDimensions(resolutionDPI int) (widthPx, heightPx int) {
-	widthPx = int(float64(resolutionDPI) * pageWidthIn)
-	heightPx = int(float64(resolutionDPI) * pageHeightIn)
-	return widthPx, heightPx
-}
-
-// SchemaColorMode maps a SANE --mode value (e.g. "Color", "Gray",
-// "Lineart") to the lowercase color_mode enum required by
-// scan-session-manifest.v1.schema.json ("color", "grayscale", "lineart").
-func SchemaColorMode(mode ScanMode) string {
-	switch mode {
-	case ModeColor:
-		return "color"
-	case ModeGray:
-		return "grayscale"
-	case ModeLineart:
-		return "lineart"
-	default:
-		return strings.ToLower(string(mode))
 	}
 }
 
