@@ -6,10 +6,12 @@ RUN CGO_ENABLED=0 go build -o /scanner-session-manager ./cmd/scanner
 
 FROM debian:bookworm-slim
 
+# No imagemagick: the driver only ever hands raw TIFFs to the data volume.
+# Converting, deskewing and stitching them into documents is the (future,
+# unprivileged) processor's job and belongs in that image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     sane-utils \
     libsane-dev \
-    imagemagick \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
