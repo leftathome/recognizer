@@ -34,32 +34,48 @@ These apply to **every** packet:
 
 ## 1. Packet index
 
-| ID | Title | Prio | Tier | Depends on | Executable now? |
+Status column updated 2026-08-22 after the fleet run on this branch; every
+DONE packet landed as its own commit (grep the log for `[<ID>]`).
+
+| ID | Title | Prio | Tier | Depends on | Status |
 |---|---|---|---|---|---|
-| B1 | Make the CNP real: selector, egress set, hardware-ns policy | P0 | sonnet | — | ✅ |
-| B2 | securityContexts for scanner + relay; relay Dockerfile USER | P0 | haiku | — | ✅ |
-| B3 | Relay hardening: threaded server, bounded+unique dead-letters | P1 | sonnet | — | ✅ |
-| B4 | Glovebox token: env var → mounted file, re-read per delivery | P1 | sonnet | — | ✅ |
-| B5 | Rotate + purge `.beads-credential-key`; .gitignore secrets patterns | P0/P3 | operator + haiku | — | ⚠️ gitignore only |
-| B6 | Kill `capture`-namespace fossils (scanner cfg, alerts, post_rip default) | P1 | haiku | — | ✅ |
-| B7 | `automountServiceAccountToken: false` everywhere | P2 | haiku | — | ✅ |
-| A1 | Values/docs: glovebox floor 0.6.4, bearerPort migration note, required-mode gate | P1 | haiku | — | ✅ |
-| A2 | Delivery client: `https://` + optional CA bundle support | P1 | sonnet | — | ✅ |
-| A3 | Upstream issues to glovebox (handoff staleness, producer cert, mount-path doc bug) | P2 | orchestrator | user sign-off | ❌ needs approval |
-| C1 | Deploy `post_rip.py`: mount + wire into ARM | P1 | sonnet | B6 | ✅ |
-| C2 | Scanner: wire manifest+notify into `main.go`; real device name; read config | P1 | sonnet | B6 | ✅ |
-| C3 | Dead-letter drain CronJob | P2 | sonnet | B3 | ✅ |
-| C4 | Metrics: relay `/metrics` + fixed ServiceMonitor/alerts | P2 | sonnet | — | ✅ |
-| C5 | Grafana dashboard JSON | P3 | haiku | C4 | ✅ |
-| C6 | Chart render tests (pytest + `helm template` assertions) | P1 | sonnet | B1,B2,B6 | ✅ |
+| B1 | Make the CNP real: selector, egress set, hardware-ns policy | P0 | sonnet | — | ✅ DONE (also fixed the never-matching relay egress selector) |
+| B2 | securityContexts for scanner + relay; relay Dockerfile USER | P0 | haiku | — | ✅ DONE |
+| B3 | Relay hardening: threaded server, bounded+unique dead-letters | P1 | sonnet | — | ✅ DONE |
+| B4 | Glovebox token: env var → mounted file, re-read per delivery | P1 | sonnet | — | ✅ DONE |
+| B5 | Rotate + purge `.beads-credential-key`; .gitignore secrets patterns | P0/P3 | operator + haiku | — | ⚠️ gitignore DONE; **rotation/purge still an operator action** |
+| B6 | Kill `capture`-namespace fossils (scanner cfg, alerts, post_rip default) | P1 | haiku | — | ✅ DONE |
+| B7 | `automountServiceAccountToken: false` everywhere | P2 | haiku | — | ✅ DONE |
+| A1 | Values/docs: glovebox floor 0.6.4, bearerPort migration note, required-mode gate | P1 | haiku | — | ✅ DONE |
+| A2 | Delivery client: `https://` + optional CA bundle support | P1 | sonnet | — | ✅ DONE |
+| A3 | Upstream issues to glovebox (handoff staleness, producer cert, mount-path doc bug) | P2 | orchestrator | user sign-off | ❌ awaiting approval |
+| C1 | Deploy `post_rip.py`: mount + wire into ARM | P1 | sonnet | B6 | ✅ DONE (via ARM's verified `BASH_SCRIPT`; NOTIFY_WEBHOOK arm.yaml key was invented and got removed) |
+| C2 | Scanner: wire manifest+notify into `main.go`; real device name; read config | P1 | sonnet | B6 | ✅ DONE |
+| C3 | Dead-letter drain CronJob | P2 | sonnet | B3 | ✅ DONE |
+| C4 | Metrics: relay `/metrics` + fixed ServiceMonitor/alerts | P2 | sonnet | — | ✅ DONE |
+| C5 | Grafana dashboard JSON | P3 | haiku | C4 | ✅ DONE |
+| C6 | Chart render tests (pytest + `helm template` assertions) | P1 | sonnet | B1,B2,B6 | ✅ DONE (suite caught + we fixed: dashboard JSON rendered as object; duplicate part-of labels on 4 ExternalSecrets) |
 | C7 | Scanner driver/processor split — Slice 1 | P2 | opus/sonnet, phased | C2 | ❌ large; own PR |
-| C8 | Schema: `disc-detected`/`disc-ejected` events (`archiver-9xw`) | P3 | sonnet | — | ✅ |
-| H1 | Unblock CI (`archiver-850`): go1.26.4 bump + pypi SSL | P1 | sonnet | — | ⚠️ best-effort, can't run CI here |
-| H2 | Tracker reconciliation: re-open/annotate misclosed beads, file new ones | P2 | operator/orchestrator | bd available | ❌ needs `bd` |
+| C8 | Schema: `disc-detected`/`disc-ejected` events (`archiver-9xw`) | P3 | sonnet | — | ✅ DONE |
+| H1 | Unblock CI (`archiver-850`): go1.26.4 bump + pypi→apt jsonschema | P1 | sonnet | — | ⚠️ changes landed; **pipeline verification pending on GitLab** |
+| H2 | Tracker reconciliation: re-open/annotate misclosed beads, file new ones | P2 | operator/orchestrator | bd available | ❌ needs `bd` (unavailable in the fleet's environment) |
 | H3 | Verify gitops-side artifacts (NFD rules incl. USB class 06, SDM, Flux HelmRelease, ns label) | P1 | operator | gitops repo access | ❌ cross-repo |
 
-"Executable now" = in this repo, by an agent, with the validation gates above.
 ❌/⚠️ packets are documented hand-offs, not silent drops.
+
+### Follow-ups discovered during execution (for H2's bead filing)
+- `.gitlab-ci.yml` needs `GITLAB_TOKEN` on the new `test:chart` job? No —
+  but the walhelm packages (`internal/walhelm`, `cmd/walhelm-fetch`) could
+  not be compiled in the fleet environment (private walhelm-go); their B4/A2
+  edits are minimal and mirrored from tested code, and CI's
+  `test:go:archive-importer` is the authoritative check.
+- Scanner: `session.StartIdleTimer()` and an ADF-complete trigger are still
+  not wired into the HTTP surface (pre-existing; belongs to C7/Slice 1).
+- The chart's inlined `post_rip.py` copy (hook ConfigMap) must track
+  `images/optical-ripper/hooks/post_rip.py`; the C6 render test fails on
+  drift, so a divergence cannot land silently.
+- Relay drain + queue knobs are values-driven; gitops HelmRelease values may
+  want overrides once real destination volume is known.
 
 ## 2. Packet specifications
 
