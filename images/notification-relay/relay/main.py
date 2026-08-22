@@ -20,6 +20,7 @@ from relay.config import load_destinations
 from relay.fanout import fan_out
 from relay.retry import with_retry
 from relay.deadletter import write_dead_letter
+from relay.metrics import Metrics
 
 
 logger = logging.getLogger("relay")
@@ -75,6 +76,7 @@ class RelayServer(ThreadingHTTPServer):
         )
         self.worker_count = RELAY_WORKERS if worker_count is None else worker_count
         self._workers = []
+        self.metrics = Metrics(queue_depth_fn=self.event_queue.qsize)
 
     def start_workers(self):
         """Start the delivery worker pool. Call once, after construction."""
@@ -102,13 +104,18 @@ class RelayServer(ThreadingHTTPServer):
                 return fan_out(event, [d], timeout=10)[0]
 
             result = with_retry(_do, max_attempts=self.max_attempts, delays=self.retry_delays)
-            if not result.success:
-                write_dead_letter(
+            if result.success:
+                self.metrics.delivery_succeeded()
+            else:
+                self.metrics.delivery_failed()
+                written = write_dead_letter(
                     event,
                     result.error,
                     self.dead_letter_dir,
                     max_files=self.deadletter_max,
                 )
+                if written is not None:
+                    self.metrics.dead_lettered()
 
 
 class RelayHandler(BaseHTTPRequestHandler):
@@ -121,18 +128,21 @@ class RelayHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
 
+        server = self.server  # a RelayServer instance
+
         try:
             event = json.loads(body)
         except (json.JSONDecodeError, ValueError) as e:
+            server.metrics.event_rejected()
             self._respond(400, {"error": f"invalid JSON: {e}"})
             return
 
         errs = validation_errors(event)
         if errs:
+            server.metrics.event_rejected()
             self._respond(400, {"error": "validation failed", "details": errs})
             return
 
-        server = self.server  # a RelayServer instance
         try:
             server.event_queue.put_nowait(event)
         except queue.Full:
@@ -149,20 +159,27 @@ class RelayHandler(BaseHTTPRequestHandler):
                 "event queue full (max=%d); dead-lettering immediately",
                 server.event_queue.maxsize,
             )
-            write_dead_letter(
+            written = write_dead_letter(
                 event,
                 "queue full: relay worker backlog exceeded RELAY_QUEUE_MAX",
                 server.dead_letter_dir,
                 max_files=server.deadletter_max,
             )
+            if written is not None:
+                server.metrics.dead_lettered()
+            server.metrics.event_accepted()
             self._respond(202, {"accepted": True, "queued": False, "dead_lettered": True})
             return
 
+        server.metrics.event_accepted()
         self._respond(202, {"accepted": True, "queued": True})
 
     def do_GET(self):
         if self.path == "/healthz":
             self._respond(200, {"status": "ok"})
+            return
+        if self.path == "/metrics":
+            self._respond_text(200, self.server.metrics.render())
             return
         self.send_error(404)
 
@@ -171,6 +188,14 @@ class RelayHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps(body).encode("utf-8"))
+
+    def _respond_text(self, code, text):
+        body = text.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, format, *args):
         pass

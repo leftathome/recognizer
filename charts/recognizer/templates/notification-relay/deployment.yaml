@@ -59,6 +59,12 @@ spec:
               value: /out/notifications/dead-letter
             - name: RELAY_CONFIG_PATH
               value: /etc/relay/config.yaml
+            - name: RELAY_QUEUE_MAX
+              value: {{ .Values.notificationRelay.queueMax | quote }}
+            - name: RELAY_WORKERS
+              value: {{ .Values.notificationRelay.workers | quote }}
+            - name: RELAY_DEADLETTER_MAX
+              value: {{ .Values.notificationRelay.deadLetter.maxFiles | quote }}
             - name: DISCORD_WEBHOOK_URL
               valueFrom:
                 secretKeyRef:

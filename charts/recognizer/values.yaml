@@ -130,6 +130,15 @@ notificationRelay:
     name: notification-relay
     tag: ""
   replicaCount: 2
+  # Bounded in-memory queue between the HTTP handler and the delivery
+  # worker pool (images/notification-relay/relay/main.py RelayServer).
+  # Past this many events waiting for a worker, new ones are dead-lettered
+  # immediately instead of blocking the request thread. Matches the code's
+  # own RELAY_QUEUE_MAX default -- set here so it's tunable per release
+  # without touching the image.
+  queueMax: 1000
+  # Background worker threads draining the delivery queue (RELAY_WORKERS).
+  workers: 2
   resources:
     requests:
       cpu: 50m
@@ -137,6 +146,35 @@ notificationRelay:
     limits:
       cpu: 250m
       memory: 256Mi
+  # Dead-letter directory behavior, shared between the relay Deployment
+  # (which writes dead-letters on delivery failure / queue-full) and the
+  # drain CronJob below (which re-delivers and deletes them, or ages them
+  # out). See images/notification-relay/relay/deadletter.py and drain.py.
+  deadLetter:
+    # Refuse new dead-letter writes once the directory holds this many
+    # files (RELAY_DEADLETTER_MAX) -- caps growth on the shared PVC.
+    maxFiles: 10000
+    # Hourly CronJob that re-POSTs each dead-lettered event to the
+    # configured destinations, deleting the file on full success and
+    # leaving it in place (for the next run) on any destination failure.
+    drain:
+      enabled: true
+      schedule: "0 * * * *"   # hourly
+      suspend: false
+      # Age out (delete, loudly logged) dead-letter files older than this
+      # many days instead of retrying them forever (RELAY_DEADLETTER_MAX_AGE_DAYS).
+      maxAgeDays: 14
+      # Cap on files touched per run (RELAY_DRAIN_BATCH), so a large
+      # backlog can't make one invocation run unboundedly long -- the
+      # remainder waits for the next scheduled fire.
+      batchSize: 500
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
 
 opticalRipper:
   enabled: true
