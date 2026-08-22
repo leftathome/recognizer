@@ -55,7 +55,7 @@ DONE packet landed as its own commit (grep the log for `[<ID>]`).
 | C4 | Metrics: relay `/metrics` + fixed ServiceMonitor/alerts | P2 | sonnet | — | ✅ DONE |
 | C5 | Grafana dashboard JSON | P3 | haiku | C4 | ✅ DONE |
 | C6 | Chart render tests (pytest + `helm template` assertions) | P1 | sonnet | B1,B2,B6 | ✅ DONE (suite caught + we fixed: dashboard JSON rendered as object; duplicate part-of labels on 4 ExternalSecrets) |
-| C7 | Scanner driver/processor split — Slice 1 | P2 | opus/sonnet, phased | C2 | ❌ large; own PR |
+| C7 | Scanner driver/processor split — Slice 1 | P2 | opus/sonnet, phased | C2 | ⚠️ code+chart DONE (own PR, chart 0.7.0); **tag + in-cluster acceptance pending operator** |
 | C8 | Schema: `disc-detected`/`disc-ejected` events (`archiver-9xw`) | P3 | sonnet | — | ✅ DONE |
 | H1 | Unblock CI (`archiver-850`): go1.26.4 bump + pypi→apt jsonschema | P1 | sonnet | — | ⚠️ changes landed; **pipeline verification pending on GitLab** |
 | H4 | GitHub Actions CI (glovebox's pattern) while developing against GitHub | P1 | orchestrator | — | ✅ DONE — `.github/workflows/{ci,codeql,release}.yml`: tests (python+chart render, both Go modules), govulncheck+trivy, helm lint/kubeconform/OCI chart push, multi-arch images to `ghcr.io/leftathome/recognizer/*`, tag-driven release. Walhelm packages/image excluded (private dep only reachable from gitlab.orac.local) — GitLab CI remains their gate |
@@ -72,6 +72,13 @@ DONE packet landed as its own commit (grep the log for `[<ID>]`).
   `test:go:archive-importer` is the authoritative check.
 - Scanner: `session.StartIdleTimer()` and an ADF-complete trigger are still
   not wired into the HTTP surface (pre-existing; belongs to C7/Slice 1).
+  *Resolved differently by Slice 1:* sessions left the driver entirely, so
+  the idle timer is a Slice 2 (processor) concern and ADF completion is now
+  synchronous — `ScanBatch` returns when the feeder empties.
+- optical-ripper sets no `runAsNonRoot` even with `hardware.enabled=false`,
+  so under legacy single-namespace mode it cannot satisfy the PSS=restricted
+  posture the release namespace enforces (ARM's entrypoint needs root
+  either way). Pre-existing; found by C6's guard while extending it for C7.
 - The chart's inlined `post_rip.py` copy (hook ConfigMap) must track
   `images/optical-ripper/hooks/post_rip.py`; the C6 render test fails on
   drift, so a divergence cannot land silently.
@@ -302,6 +309,23 @@ as written (it is already TDD-granular): privileged stateless
 mapping), `ScanBatch`, session manager removal. Too large for this PR;
 depends on C2 landing first so the current binary's behavior is pinned by
 tests. Recommend a dedicated follow-up with opus/sonnet.
+
+**Executed 2026-08-22** (own PR, chart `0.7.0`): plan Tasks 1–6 landed as
+four commits; the plan doc carries the full execution record, including six
+documented deviations forced by packets that landed after it was written
+(C2's `config` package and device override, B2's pod hardening vs.
+privileged USB access, C6's privileged-pod guard). Still open, both
+requiring hardware/operator access this environment does not have:
+- **Task 6 Step 3–4:** merge + `git tag v0.7.0` so CI publishes
+  `document-scanner:0.7.0` and Flux reconciles it onto `johnny`. Until then
+  the deployed pod stays on the old image and the gate below tests nothing.
+- **Task 7 (manual gate):** `/status` reports the device; empty feeder →
+  422; one duplex sheet → 2 TIFFs on the PVC. Then close `archiver-9aj` and
+  `archiver-hee`.
+
+Slice 2 (the unprivileged processor: sessions, manifests,
+`scan-session-complete` events — all four packages are recoverable from this
+PR's parent commit) is not started and is the natural next slice.
 
 ### C8 — `disc-detected`/`disc-ejected` schema events (P3, sonnet)
 Per bead `archiver-9xw`: add to `notification-event.v1.1.schema.json` (or cut

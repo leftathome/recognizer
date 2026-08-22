@@ -3,7 +3,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: {{ include "recognizer.fullname" . }}-document-scanner
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "recognizer.hardwareNamespace" . }}
   labels:
     {{- include "recognizer.labels" . | nindent 4 }}
     app.kubernetes.io/component: document-scanner
@@ -26,6 +26,21 @@ spec:
       {{- end }}
       nodeSelector:
         {{- toYaml .Values.documentScanner.nodeSelector | nindent 8 }}
+      {{- if .Values.hardware.enabled }}
+      # Hardware namespace (PSS=privileged). The driver reaches the DS-1630
+      # through hostPath /dev, and libusb has to *write* the device node
+      # under /dev/bus/usb -- those nodes are root-owned, and a non-root
+      # process in a privileged container still gets no capabilities in its
+      # permitted set, so runAsUser 1000 would fail to open the scanner.
+      # Root here is what privileged passthrough costs; it is contained to
+      # this namespace, same as the optical-ripper.
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      {{- else }}
+      # Legacy single-namespace path (PSS=restricted). No device passthrough
+      # is possible here, so the pod stays fully hardened; /scan will report
+      # no scanner. Prefer hardware.enabled.
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000
@@ -34,21 +49,37 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
+      {{- end }}
       containers:
         - name: scanner
           image: {{ include "recognizer.image" (dict "root" $ "name" .Values.documentScanner.image.name "tag" .Values.documentScanner.image.tag) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.hardware.enabled }}
+          # Privileged + hostPath /dev so the SANE epsonds backend can claim
+          # the scanner's USB interface regardless of the bus/device numbers
+          # it enumerates at, which change across replugs.
+          securityContext:
+            privileged: true
+          {{- else }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+          {{- end }}
+          env:
+            # Per-scan output directories are created under here; the
+            # processor (Slice 2) picks them up off the same volume.
+            - name: SCANNER_OUTPUT_DIR
+              value: /out/scans
           resources:
             {{- toYaml .Values.documentScanner.resources | nindent 12 }}
           volumeMounts:
             - name: incoming
               mountPath: /out
-            - name: scanner-config
-              mountPath: /etc/scanner
+            {{- if .Values.hardware.enabled }}
+            - name: host-dev
+              mountPath: /dev
+            {{- end }}
           ports:
             - name: web-ui
               containerPort: 8080
@@ -56,7 +87,13 @@ spec:
         - name: incoming
           persistentVolumeClaim:
             claimName: {{ include "recognizer.dataClaimName" . }}
-        - name: scanner-config
-          configMap:
-            name: {{ include "recognizer.fullname" . }}-scanner-config
+        {{- if .Values.hardware.enabled }}
+        # Host device tree so libusb sees the scanner's /dev/bus/usb node.
+        # Requires the privileged securityContext above and the relaxed PSS
+        # on the hardware namespace.
+        - name: host-dev
+          hostPath:
+            path: /dev
+            type: Directory
+        {{- end }}
 {{- end }}
