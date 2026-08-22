@@ -72,28 +72,59 @@ spec:
                       fieldPath: spec.nodeName
                 {{- if .Values.archiveImporter.gloveboxIngest.enabled }}
                 # Glovebox archive-delivery (spec 13 / tus.io). When these
-                # three are set, recognized subtrees push to glovebox after
-                # the matcher pass. URL + sourceID come from Values; token
-                # is materialized by the ExternalSecret in
-                # externalsecret-glovebox-token.yaml.
+                # are set, recognized subtrees push to glovebox after the
+                # matcher pass. URL + sourceID come from Values; the bearer
+                # token is materialized by the ExternalSecret in
+                # externalsecret-glovebox-token.yaml, but reaches the binary
+                # as a mounted file (not env) -- re-read per delivery so
+                # Vault rotation propagates in minutes without a pod
+                # restart, and so it never sits in /proc/<pid>/environ.
                 - name: GLOVEBOX_INGEST_URL
                   value: {{ .Values.archiveImporter.gloveboxIngest.url | quote }}
                 - name: GLOVEBOX_INGEST_SOURCE_ID
                   value: {{ .Values.archiveImporter.gloveboxIngest.sourceID | quote }}
-                - name: GLOVEBOX_INGEST_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ include "recognizer.fullname" . }}-glovebox-ingest-token
-                      key: token
+                - name: GLOVEBOX_INGEST_TOKEN_FILE
+                  value: /var/run/glovebox/token
+                {{- if .Values.archiveImporter.gloveboxIngest.tls.caConfigMap }}
+                # Forward wiring for the day glovebox's bearer listener
+                # requires TLS (server side is plaintext today; see
+                # docs/analysis/glovebox-integration-review.md §7).
+                - name: GLOVEBOX_INGEST_CA_FILE
+                  value: /var/run/glovebox-ca/{{ .Values.archiveImporter.gloveboxIngest.tls.caKey | default "ca.crt" }}
+                {{- end }}
+                {{- if .Values.archiveImporter.gloveboxIngest.tls.requireTLS }}
+                - name: GLOVEBOX_INGEST_REQUIRE_TLS
+                  value: "true"
+                {{- end }}
                 {{- end }}
               args: ["ingest", "/data/incoming/archives/raw/REPLACE-ME.zip"]
               volumeMounts:
                 - name: data
                   mountPath: /data/incoming/archives
+                {{- if .Values.archiveImporter.gloveboxIngest.enabled }}
+                - name: glovebox-ingest-token
+                  mountPath: /var/run/glovebox
+                  readOnly: true
+                {{- if .Values.archiveImporter.gloveboxIngest.tls.caConfigMap }}
+                - name: glovebox-ca
+                  mountPath: /var/run/glovebox-ca
+                  readOnly: true
+                {{- end }}
+                {{- end }}
               resources:
                 {{- toYaml .Values.archiveImporter.resources | nindent 16 }}
           volumes:
             - name: data
               persistentVolumeClaim:
                 claimName: {{ include "recognizer.dataClaimName" . }}
+            {{- if .Values.archiveImporter.gloveboxIngest.enabled }}
+            - name: glovebox-ingest-token
+              secret:
+                secretName: {{ include "recognizer.fullname" . }}-glovebox-ingest-token
+            {{- if .Values.archiveImporter.gloveboxIngest.tls.caConfigMap }}
+            - name: glovebox-ca
+              configMap:
+                name: {{ .Values.archiveImporter.gloveboxIngest.tls.caConfigMap }}
+            {{- end }}
+            {{- end }}
 {{- end }}

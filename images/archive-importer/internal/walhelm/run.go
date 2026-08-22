@@ -19,11 +19,22 @@ type RunConfig struct {
 	StateDir string
 	// IngestURL is the glovebox archive-delivery base URL.
 	IngestURL string
-	// IngestToken is the bearer token for glovebox.
+	// IngestToken is the bearer token fallback for glovebox
+	// (GLOVEBOX_INGEST_TOKEN), used only when IngestTokenFile is unset.
 	IngestToken string
+	// IngestTokenFile, when set, is re-read (and trimmed) per request
+	// (GLOVEBOX_INGEST_TOKEN_FILE) so Vault token rotation propagates
+	// without a pod restart. Takes precedence over IngestToken.
+	IngestTokenFile string
 	// IngestSourceID is the recognizer's glovebox source-id.
 	IngestSourceID string
-	// HTTPClient is optional; nil yields a sane default via delivery.NewClient.
+	// IngestCAFile, when set, pins an additional trusted CA for the
+	// glovebox TLS connection (GLOVEBOX_INGEST_CA_FILE).
+	IngestCAFile string
+	// IngestRequireTLS refuses to build a client against an http://
+	// IngestURL (GLOVEBOX_INGEST_REQUIRE_TLS).
+	IngestRequireTLS bool
+	// HTTPClient is optional; nil yields a sane default via delivery.NewClientFromConfig.
 	HTTPClient *http.Client
 	// TempDir is where the tar is written; "" falls back to os.TempDir().
 	TempDir string
@@ -84,7 +95,18 @@ func RunOnce(ctx context.Context, cli WalhelmClient, cfg RunConfig) (delivered b
 		return false, fmt.Errorf("walhelm run: invalid delivery item: %w", verr)
 	}
 
-	client := delivery.NewClient(cfg.IngestURL, cfg.IngestToken, cfg.IngestSourceID, cfg.HTTPClient)
+	client, cerr := delivery.NewClientFromConfig(delivery.ClientConfig{
+		BaseURL:    cfg.IngestURL,
+		SourceID:   cfg.IngestSourceID,
+		Token:      cfg.IngestToken,
+		TokenFile:  cfg.IngestTokenFile,
+		CAFile:     cfg.IngestCAFile,
+		RequireTLS: cfg.IngestRequireTLS,
+		HTTPClient: cfg.HTTPClient,
+	})
+	if cerr != nil {
+		return false, fmt.Errorf("walhelm run: build delivery client: %w", cerr)
+	}
 	if _, uerr := client.Upload(ctx, item, tarPath); uerr != nil {
 		// At-least-once: do NOT save state on a failed delivery.
 		return false, fmt.Errorf("walhelm run: deliver: %w", uerr)

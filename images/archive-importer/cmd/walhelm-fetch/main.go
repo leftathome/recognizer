@@ -65,7 +65,10 @@ func run(args []string) int {
 		StateDir:         cfg.StateDir,
 		IngestURL:        cfg.IngestURL,
 		IngestToken:      cfg.IngestToken,
+		IngestTokenFile:  cfg.IngestTokenFile,
 		IngestSourceID:   cfg.IngestSourceID,
+		IngestCAFile:     cfg.IngestCAFile,
+		IngestRequireTLS: cfg.IngestRequireTLS,
 	}
 
 	delivered, err := walhelmsrc.RunOnce(context.Background(), cli, rc)

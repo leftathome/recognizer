@@ -60,13 +60,24 @@ spec:
                 - configMapRef:
                     name: {{ include "recognizer.fullname" . }}-walhelm-fetch
               env:
-                # Glovebox bearer token (secret) -- the non-secret URL +
-                # source_id come from the ConfigMap via envFrom.
-                - name: GLOVEBOX_INGEST_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ include "recognizer.fullname" . }}-walhelm-glovebox-ingest-token
-                      key: token
+                # Glovebox bearer token -- the non-secret URL + source_id
+                # come from the ConfigMap via envFrom. Reaches the binary
+                # as a mounted file (not env) -- re-read per delivery so
+                # Vault rotation propagates in minutes without a pod
+                # restart, and so it never sits in /proc/<pid>/environ.
+                - name: GLOVEBOX_INGEST_TOKEN_FILE
+                  value: /var/run/glovebox/token
+                {{- if .Values.walhelmSource.gloveboxIngest.tls.caConfigMap }}
+                # Forward wiring for the day glovebox's bearer listener
+                # requires TLS (server side is plaintext today; see
+                # docs/analysis/glovebox-integration-review.md §7).
+                - name: GLOVEBOX_INGEST_CA_FILE
+                  value: /var/run/glovebox-ca/{{ .Values.walhelmSource.gloveboxIngest.tls.caKey | default "ca.crt" }}
+                {{- end }}
+                {{- if .Values.walhelmSource.gloveboxIngest.tls.requireTLS }}
+                - name: GLOVEBOX_INGEST_REQUIRE_TLS
+                  value: "true"
+                {{- end }}
               volumeMounts:
                 # walhelm session JSON, projected by the ExternalSecret and
                 # mounted read-only at WALHELM_SESSION_FILE's directory.
@@ -76,6 +87,14 @@ spec:
                 # Shared data PVC holds WALHELM_STATE_DIR (per-subject cursors).
                 - name: data
                   mountPath: /data
+                - name: glovebox-ingest-token
+                  mountPath: /var/run/glovebox
+                  readOnly: true
+                {{- if .Values.walhelmSource.gloveboxIngest.tls.caConfigMap }}
+                - name: glovebox-ca
+                  mountPath: /var/run/glovebox-ca
+                  readOnly: true
+                {{- end }}
               resources:
                 {{- toYaml .Values.walhelmSource.resources | nindent 16 }}
           volumes:
@@ -85,4 +104,12 @@ spec:
             - name: data
               persistentVolumeClaim:
                 claimName: {{ include "recognizer.dataClaimName" . }}
+            - name: glovebox-ingest-token
+              secret:
+                secretName: {{ include "recognizer.fullname" . }}-walhelm-glovebox-ingest-token
+            {{- if .Values.walhelmSource.gloveboxIngest.tls.caConfigMap }}
+            - name: glovebox-ca
+              configMap:
+                name: {{ .Values.walhelmSource.gloveboxIngest.tls.caConfigMap }}
+            {{- end }}
 {{- end }}

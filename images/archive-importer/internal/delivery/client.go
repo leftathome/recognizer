@@ -2,6 +2,8 @@ package delivery
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -13,22 +15,81 @@ import (
 	"time"
 )
 
+// Environment variables shared by both cmd/archive-importer and
+// cmd/walhelm-fetch. Keeping the names here (rather than re-declared
+// per-binary) is what lets both flag-parsers and the chart agree on a
+// single source of truth.
+const (
+	// EnvToken is the static bearer token fallback, used only when
+	// EnvTokenFile is unset. Read once; a rotated value requires a pod
+	// restart to take effect (Vault ExternalSecret only refreshes the
+	// backing Secret, not already-injected env).
+	EnvToken = "GLOVEBOX_INGEST_TOKEN"
+	// EnvTokenFile points at a file containing the bearer token. When
+	// set, it takes precedence over EnvToken and is re-read (and
+	// trimmed) on every request, so Vault rotation propagates within
+	// the ~1-6 minute window the handoff doc documents -- no restart,
+	// and no token sitting in /proc/<pid>/environ.
+	EnvTokenFile = "GLOVEBOX_INGEST_TOKEN_FILE"
+	// EnvCAFile optionally points at a PEM bundle of additional trusted
+	// CAs for the glovebox TLS connection (private CA pinning).
+	EnvCAFile = "GLOVEBOX_INGEST_CA_FILE"
+	// EnvRequireTLS, when truthy ("true"/"1"), refuses to construct a
+	// client against an http:// base URL. Off by default because
+	// glovebox's bearer listener is plaintext today; this is forward
+	// wiring for the day it isn't (PHI must not transit in the clear).
+	EnvRequireTLS = "GLOVEBOX_INGEST_REQUIRE_TLS"
+)
+
 // DefaultChunkSize is the per-PATCH body size. The handoff doc
 // recommends 16-64 MiB; 32 MiB balances memory pressure vs request
 // overhead. Glovebox's idle timeout is 5 minutes per PATCH, so chunks
 // must transfer faster than that.
 const DefaultChunkSize int64 = 32 << 20
 
+// TokenSource returns the current bearer token. It is called once per
+// outbound request (POST/HEAD/PATCH), never cached across requests, so a
+// file-backed implementation naturally picks up Vault rotation without a
+// restart. Returning an error fails that request with a clear cause
+// instead of sending a stale or empty Authorization header.
+type TokenSource func() (string, error)
+
 // Client speaks tus.io v1.0.0 to glovebox's /v1/archives endpoint.
 type Client struct {
-	BaseURL   string // e.g. http://glovebox.glovebox.svc.cluster.local:9091
-	Token     string // bearer token from the Vault-projected Secret
-	SourceID  string // recognizer-smoke-test, recognizer-v1, etc.
-	HTTP      *http.Client
-	ChunkSize int64
+	BaseURL string // e.g. http://glovebox.glovebox.svc.cluster.local:9091
+	// Token is a static bearer token, used as a fallback when
+	// TokenSource is nil. Prefer TokenSource (via ResolveTokenSource)
+	// for anything that must survive Vault rotation.
+	Token       string
+	TokenSource TokenSource
+	SourceID    string // recognizer-smoke-test, recognizer-v1, etc.
+	HTTP        *http.Client
+	ChunkSize   int64
 	// MaxRetries bounds the number of times we'll retry a 5xx/429.
 	// Per chunk, not per upload.
 	MaxRetries int
+}
+
+// token resolves the bearer token for one outbound request: TokenSource
+// wins when set (re-invoked every call, so file rotation is picked up
+// per request); otherwise falls back to the static Token field. Neither
+// set is a configuration error, surfaced to the caller rather than sent
+// as an empty/absent Authorization header.
+func (c *Client) token() (string, error) {
+	if c.TokenSource != nil {
+		tok, err := c.TokenSource()
+		if err != nil {
+			return "", fmt.Errorf("delivery: resolve bearer token: %w", err)
+		}
+		if tok == "" {
+			return "", errors.New("delivery: TokenSource returned an empty token")
+		}
+		return tok, nil
+	}
+	if c.Token == "" {
+		return "", errors.New("delivery: no bearer token configured (set Token or TokenSource)")
+	}
+	return c.Token, nil
 }
 
 // NewClient returns a Client with sensible defaults. HTTP timeouts are
@@ -55,6 +116,126 @@ func NewClient(baseURL, token, sourceID string, httpClient *http.Client) *Client
 		ChunkSize:  DefaultChunkSize,
 		MaxRetries: 3,
 	}
+}
+
+// ResolveTokenSource implements the GLOVEBOX_INGEST_TOKEN_FILE /
+// GLOVEBOX_INGEST_TOKEN precedence shared by both cmd/archive-importer
+// and cmd/walhelm-fetch: tokenFile, when non-empty, wins and is re-read
+// (and trimmed) on every call -- this is what lets Vault rotation land
+// within the handoff doc's ~1-6 minute window without a pod restart, and
+// keeps the token out of /proc/<pid>/environ. tokenFile empty falls back
+// to the static token. Both empty is a configuration error, returned
+// here (at construction time) rather than deferred to the first request.
+func ResolveTokenSource(tokenFile, token string) (TokenSource, error) {
+	if tokenFile != "" {
+		return func() (string, error) {
+			b, err := os.ReadFile(tokenFile)
+			if err != nil {
+				return "", fmt.Errorf("read token file %s: %w", tokenFile, err)
+			}
+			tok := strings.TrimSpace(string(b))
+			if tok == "" {
+				return "", fmt.Errorf("token file %s is empty", tokenFile)
+			}
+			return tok, nil
+		}, nil
+	}
+	if token != "" {
+		static := token
+		return func() (string, error) { return static, nil }, nil
+	}
+	return nil, fmt.Errorf("delivery: neither %s nor %s is set", EnvTokenFile, EnvToken)
+}
+
+// ClientConfig groups every construction-time option pulled from
+// flags/env by both binaries: identity, token/rotation, and TLS trust.
+// NewClientFromConfig is the single place that turns these into a ready
+// Client (or a config error) -- both cmd/archive-importer and
+// cmd/walhelm-fetch should build their Client through it so a change
+// here (a new env var, a stricter check) reaches both with one edit.
+type ClientConfig struct {
+	BaseURL  string
+	SourceID string
+	// Token is the static bearer token fallback (GLOVEBOX_INGEST_TOKEN).
+	Token string
+	// TokenFile, when set, is re-read per request (GLOVEBOX_INGEST_TOKEN_FILE).
+	TokenFile string
+	// CAFile, when set, is a PEM bundle of additional trusted CAs
+	// (GLOVEBOX_INGEST_CA_FILE) loaded into the transport's RootCAs.
+	CAFile string
+	// RequireTLS refuses to build a client against an http:// BaseURL
+	// (GLOVEBOX_INGEST_REQUIRE_TLS).
+	RequireTLS bool
+	// HTTPClient is optional; nil yields NewClient's default.
+	HTTPClient *http.Client
+}
+
+// NewClientFromConfig builds a Client from ClientConfig, applying the
+// RequireTLS gate, the token/token-file resolution, and (when CAFile is
+// set) a custom Transport pinning that CA -- the single construction
+// path shared by cmd/archive-importer and cmd/walhelm-fetch.
+func NewClientFromConfig(cfg ClientConfig) (*Client, error) {
+	if cfg.RequireTLS {
+		u, err := url.Parse(cfg.BaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("delivery: parse base URL %q: %w", cfg.BaseURL, err)
+		}
+		if u.Scheme != "https" {
+			return nil, fmt.Errorf(
+				"delivery: %s is set but base URL %q is not https:// -- glovebox archive payloads may carry PHI and must not transit in plaintext",
+				EnvRequireTLS, cfg.BaseURL)
+		}
+	}
+
+	ts, err := ResolveTokenSource(cfg.TokenFile, cfg.Token)
+	if err != nil {
+		return nil, err
+	}
+
+	httpClient := cfg.HTTPClient
+	if cfg.CAFile != "" {
+		transport, terr := transportWithCA(cfg.CAFile)
+		if terr != nil {
+			return nil, terr
+		}
+		if httpClient == nil {
+			httpClient = &http.Client{}
+		} else {
+			// Copy so we don't mutate a client the caller may reuse
+			// elsewhere with different TLS expectations.
+			cp := *httpClient
+			httpClient = &cp
+		}
+		httpClient.Transport = transport
+	}
+
+	c := NewClient(cfg.BaseURL, "", cfg.SourceID, httpClient)
+	c.TokenSource = ts
+	return c, nil
+}
+
+// transportWithCA builds an *http.Transport trusting the system roots
+// plus the PEM bundle at caFile, with TLS 1.2 as the floor (1.3 is
+// preferred automatically since Go negotiates the highest mutually
+// supported version).
+func transportWithCA(caFile string) (*http.Transport, error) {
+	pemBytes, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("delivery: read CA file %s: %w", caFile, err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("delivery: no certificates parsed from CA file %s", caFile)
+	}
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	base.TLSClientConfig = &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS12,
+	}
+	return base, nil
 }
 
 // Upload runs the full tus.io lifecycle for one archive item against
@@ -146,7 +327,11 @@ func (c *Client) head(ctx context.Context, uploadURL string) (int64, error) {
 		return 0, err
 	}
 	req.Header.Set("Tus-Resumable", "1.0.0")
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	tok, err := c.token()
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("HEAD %s: %w", uploadURL, err)
@@ -170,7 +355,11 @@ func (c *Client) create(ctx context.Context, item Item) (uploadURL string, repla
 		return "", false, err
 	}
 	req.Header.Set("Tus-Resumable", "1.0.0")
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	tok, err := c.token()
+	if err != nil {
+		return "", false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Upload-Length", strconv.FormatInt(item.SizeBytes, 10))
 	req.Header.Set("Upload-Metadata", item.UploadMetadataHeader(c.SourceID))
 
@@ -223,7 +412,11 @@ func (c *Client) patchChunk(ctx context.Context, uploadURL string, f *os.File, o
 			return 0, err
 		}
 		req.Header.Set("Tus-Resumable", "1.0.0")
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+		tok, terr := c.token()
+		if terr != nil {
+			return 0, terr
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
 		req.Header.Set("Content-Type", "application/offset+octet-stream")
 		req.Header.Set("Upload-Offset", strconv.FormatInt(offset, 10))
 		req.ContentLength = length

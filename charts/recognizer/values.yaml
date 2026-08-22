@@ -266,6 +266,21 @@ archiveImporter:
       secretStoreRef:
         name: "vault-backend"
         kind: "ClusterSecretStore"
+    # Forward wiring for the day glovebox's bearer listener requires TLS
+    # (server side is plaintext today; see
+    # docs/analysis/glovebox-integration-review.md §7). Both fields
+    # render nothing when left at their defaults, so the default render
+    # stays byte-identical.
+    tls:
+      # Name of a ConfigMap (in this namespace) holding the private CA
+      # PEM the client should trust in addition to the system roots.
+      # Mounted read-only and wired to GLOVEBOX_INGEST_CA_FILE when set.
+      caConfigMap: ""
+      # Key inside caConfigMap holding the PEM bundle.
+      caKey: "ca.crt"
+      # When true, sets GLOVEBOX_INGEST_REQUIRE_TLS=true, which refuses
+      # to run the binary against an http:// gloveboxIngest.url.
+      requireTLS: false
 
 # ============================================================================
 # walhelm-source (spec 04 / SP3): a SUSPENDED CronJob that runs walhelm-fetch
@@ -352,3 +367,18 @@ walhelmSource:
       secretStoreRef:
         name: "vault-backend"
         kind: "ClusterSecretStore"
+    # Forward wiring for the day glovebox's bearer listener requires TLS
+    # (server side is plaintext today; see
+    # docs/analysis/glovebox-integration-review.md §7). Both fields
+    # render nothing when left at their defaults, so the default render
+    # stays byte-identical.
+    tls:
+      # Name of a ConfigMap (in this namespace) holding the private CA
+      # PEM the client should trust in addition to the system roots.
+      # Mounted read-only and wired to GLOVEBOX_INGEST_CA_FILE when set.
+      caConfigMap: ""
+      # Key inside caConfigMap holding the PEM bundle.
+      caKey: "ca.crt"
+      # When true, sets GLOVEBOX_INGEST_REQUIRE_TLS=true, which refuses
+      # to run the binary against an http:// gloveboxIngest.url.
+      requireTLS: false
