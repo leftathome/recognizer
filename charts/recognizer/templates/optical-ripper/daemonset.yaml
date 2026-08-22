@@ -118,8 +118,10 @@ spec:
             - name: EJECT_GUARD_INTERVAL
               value: {{ .Values.opticalRipper.ejectGuard.intervalSeconds | quote }}
             # archiver-9xw: disc-detected/disc-ejected best-effort notification
-            # (tender's notify_event, see optical-tender.sh). Same relay URL
-            # ARM's own arm.yaml NOTIFY_WEBHOOK config key points at.
+            # (tender's notify_event, see optical-tender.sh) AND the post-rip
+            # hook's disc-extraction-complete event (arm-hook ConfigMap,
+            # invoked via ARM's BASH_SCRIPT -- see configmap.yaml). Both read
+            # these two vars directly; neither is an ARM config key.
             - name: NODE_NAME
               valueFrom:
                 fieldRef:
@@ -182,6 +184,11 @@ spec:
             - name: optical-tender
               mountPath: /etc/optical-tender
               readOnly: true
+            # Post-rip hook (archiver-9xw follow-up): ARM's BASH_SCRIPT
+            # config key (set in configmap.yaml) points at hook.sh here.
+            - name: arm-hook
+              mountPath: /etc/arm/hooks
+              readOnly: true
             {{- end }}
           ports:
             - name: web-ui
@@ -220,5 +227,14 @@ spec:
           configMap:
             name: {{ include "recognizer.fullname" . }}-optical-tender
             defaultMode: 0755
+        # Post-rip hook (archiver-9xw follow-up): hook.sh + post_rip.py,
+        # invoked by ARM's own BASH_SCRIPT mechanism (see configmap.yaml).
+        # 0555: ARM execs hook.sh via `bash <path>` so the +x bit isn't
+        # load-bearing for that call, but the mode still makes the mount's
+        # executable semantics explicit/correct for any other invocation.
+        - name: arm-hook
+          configMap:
+            name: {{ include "recognizer.fullname" . }}-arm-hook
+            defaultMode: 0555
         {{- end }}
 {{- end }}

@@ -9,7 +9,7 @@ opt-in monitoring.
 |---|---|---|
 | `document-scanner` | DaemonSet (per node with USB scanner) | SANE wrapper + session manager; emits scan-session manifests |
 | `notification-relay` | Deployment (2 replicas by default) | Validates capture events against JSON Schema, fans out to webhooks |
-| `optical-ripper` | DaemonSet (per node with USB optical drive) | Wraps Automatic Ripping Machine; post-rip hook posts to the relay |
+| `optical-ripper` | DaemonSet (per node with USB optical drive) | Wraps Automatic Ripping Machine; post-rip hook (via ARM's `BASH_SCRIPT`, hardware-namespace mode only) posts a completion event to the relay |
 | `archive-importer` | Suspended CronJob template (promoted to a Job per spec 03 § 8.1) | Imports finished digital archives (Google Takeout in v0.2.0); emits per-subtree notification events |
 
 The `incoming` PVC is shared across all four so finished captures and
