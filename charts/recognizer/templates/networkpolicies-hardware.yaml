@@ -1,0 +1,62 @@
+{{- if and .Values.hardware.enabled .Values.networkPolicies.enabled }}
+# CiliumNetworkPolicy for the privileged hardware namespace
+# (recognizer-hardware). Mirrors networkpolicies.yaml's structure but scoped
+# to what optical-ripper/document-scanner actually need: relay delivery back
+# into the release namespace, disc-identification lookups, DNS, and inbound
+# access to ARM's web UI from the release namespace. Gated on the same
+# networkPolicies.enabled flag as the release-namespace policy, in addition
+# to hardware.enabled (no hardware namespace, no policy to render).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "recognizer.fullname" . }}-hardware-pods-egress
+  namespace: {{ include "recognizer.hardwareNamespace" . }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: recognizer
+  egress:
+    # notification-relay lives in the release namespace, not the hardware
+    # namespace. The post-rip hook (C1) and the scanner's OnClose notify()
+    # call both cross that namespace boundary to reach it on :8080.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Release.Namespace }}
+            app.kubernetes.io/name: {{ include "recognizer.name" . }}
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            app.kubernetes.io/component: notification-relay
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    - toFQDNs:
+        - matchName: www.omdbapi.com
+        - matchName: musicbrainz.org
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+  ingress:
+    # ARM's web UI (optical-ripper :8080) is reachable from the release
+    # namespace only (e.g. an operator port-forwarding via a release-ns
+    # pod, or a future in-cluster proxy). No other source is permitted.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Release.Namespace }}
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+{{- end }}

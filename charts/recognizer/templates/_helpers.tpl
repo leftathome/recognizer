@@ -23,6 +23,12 @@ Create a default fully qualified app name.
 
 {{/*
 Common labels.
+
+part-of marks every chart-managed pod across both namespaces; the
+CiliumNetworkPolicies select on it. Safe to carry here because no workload
+in this chart uses recognizer.labels inside spec.selector.matchLabels
+(selectors are hand-picked name/instance/component subsets and stay
+immutable/unchanged).
 */}}
 {{- define "recognizer.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
@@ -30,6 +36,7 @@ app.kubernetes.io/name: {{ include "recognizer.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/part-of: recognizer
 {{- with .Values.commonLabels }}
 {{- toYaml . | nindent 0 }}
 {{- end }}

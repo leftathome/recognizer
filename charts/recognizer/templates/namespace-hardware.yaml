@@ -10,7 +10,6 @@ metadata:
   name: {{ .Values.hardware.namespace }}
   labels:
     {{- include "recognizer.labels" . | nindent 4 }}
-    app.kubernetes.io/part-of: recognizer
     pod-security.kubernetes.io/enforce: {{ .Values.hardware.podSecurityStandard }}
     pod-security.kubernetes.io/audit: {{ .Values.hardware.podSecurityStandard }}
     pod-security.kubernetes.io/warn: {{ .Values.hardware.podSecurityStandard }}

@@ -254,6 +254,13 @@ archiveImporter:
     # test uses "recognizer-smoke-test"; production uses whatever you
     # negotiated with the glovebox operator.
     sourceID: "recognizer-smoke-test"
+    # Egress target for the CiliumNetworkPolicy (networkpolicies.yaml). Must
+    # track the host:port in `url` above -- when the operator lands the
+    # bearerPort migration noted above and moves /v1/archives off the shared
+    # 9091 listener, update `port` here in the same maintenance window.
+    egress:
+      namespace: glovebox
+      port: 9091
     vault:
       refreshInterval: "1m"
       secretStoreRef:
@@ -333,6 +340,13 @@ walhelmSource:
   gloveboxIngest:
     url: "http://glovebox.glovebox.svc.cluster.local:9091"
     sourceID: "recognizer-walhelm"
+    # Egress target for the CiliumNetworkPolicy (networkpolicies.yaml). Must
+    # track the host:port in `url` above -- when the operator lands the
+    # bearerPort migration noted above and moves /v1/archives off the shared
+    # 9091 listener, update `port` here in the same maintenance window.
+    egress:
+      namespace: glovebox
+      port: 9091
     vault:
       refreshInterval: "1m"
       secretStoreRef:
