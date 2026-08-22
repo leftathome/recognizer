@@ -48,7 +48,7 @@ DONE packet landed as its own commit (grep the log for `[<ID>]`).
 | B7 | `automountServiceAccountToken: false` everywhere | P2 | haiku | — | ✅ DONE |
 | A1 | Values/docs: glovebox floor 0.6.4, bearerPort migration note, required-mode gate | P1 | haiku | — | ✅ DONE |
 | A2 | Delivery client: `https://` + optional CA bundle support | P1 | sonnet | — | ✅ DONE |
-| A3 | Upstream issues to glovebox (handoff staleness, producer cert, mount-path doc bug) | P2 | orchestrator | user sign-off | ❌ awaiting approval |
+| A3 | Upstream issues to glovebox (handoff staleness, producer cert, mount-path doc bug) | P2 | orchestrator | user sign-off | ✅ DONE — filed with sign-off 2026-08-22: glovebox#65, #69, #70 |
 | C1 | Deploy `post_rip.py`: mount + wire into ARM | P1 | sonnet | B6 | ✅ DONE (via ARM's verified `BASH_SCRIPT`; NOTIFY_WEBHOOK arm.yaml key was invented and got removed) |
 | C2 | Scanner: wire manifest+notify into `main.go`; real device name; read config | P1 | sonnet | B6 | ✅ DONE |
 | C3 | Dead-letter drain CronJob | P2 | sonnet | B3 | ✅ DONE |
@@ -209,10 +209,24 @@ mounted-ConfigMap CA, rendered only when set.
 wrong CA refused, require-TLS refuses http); `go vet`/`go test` green;
 `helm template` unchanged when values unset.
 
-### A3 — Upstream glovebox issues (P2, orchestrator, **needs user sign-off**)
-File three issues on `leftathome/glovebox` per integration review §6
-(handoff-doc staleness; missing `producer` cert template; mTLS mount-path
-doc/chart mismatch). Outward-facing: do not file without the user's go-ahead.
+### A3 — Upstream glovebox issues (P2, orchestrator) — ✅ DONE 2026-08-22
+Filed on `leftathome/glovebox` per integration review §6, with the user's
+explicit go-ahead (outward-facing, so it waited for sign-off):
+
+- **glovebox#65** — `docs/handoffs/recognizer-archive-delivery.md` drift:
+  4 of 6 media types listed, no `bearer_port` section, no `required`-mode
+  caveat, no `archive/recognizer-scan` section, chart 0.4.2 references, and
+  the missing "app 0.6.4 is the floor for multi-GB uploads" note.
+- **glovebox#69** — no `producer`-kind `Certificate` template in the chart,
+  though `spiffe://glovebox/producer/<name>` is documented and accepted by
+  the SAN parser. Not blocking (our path is bearer-token) — filed so the gap
+  is on the books before mTLS reaches the bearer surface.
+- **glovebox#70** — `docs/ingest-mtls.md` gives client keypair paths as
+  `/etc/glovebox/tls/` while the chart mounts `/etc/ingest-tls/`; in-chart
+  connectors are unaffected, out-of-chart clients hit a hard startup error.
+
+Nothing here is a recognizer code change; track the responses if we later
+need the producer cert (§4.3 of the integration review).
 
 ### C1 — Deploy the post-rip hook (P1, sonnet, after B6)
 **Context:** `images/optical-ripper/hooks/post_rip.py` is tested but unwired;
@@ -350,7 +364,7 @@ Wave 1 (parallel): B2, B6, B7, A1, B5(gitignore)      — mechanical, unblock ot
 Wave 2 (parallel): B1, B3, B4, A2, C8                 — core security + client
 Wave 3 (parallel): C1, C2, C3, C4, H1                 — wiring + observability
 Wave 4:            C6 (locks everything in), C5
-Later/elsewhere:   C7 (own PR), A3+H2+H3 (operator/user)
+Later/elsewhere:   C7 (own PR), H2+H3 (operator)   [A3 filed 2026-08-22]
 ```
 
 ## 4. Explicitly out of scope here (so nothing is silently dropped)
@@ -358,7 +372,6 @@ Later/elsewhere:   C7 (own PR), A3+H2+H3 (operator/user)
 - Anything requiring the physical hardware (cold-plug e2e `archiver-e1a`,
   flatbed acceptance `archiver-hee`).
 - The gitops repo (H3) and GitLab pipeline execution (H1 validation).
-- Filing upstream glovebox issues (A3) — needs user sign-off.
 - mTLS client certificates for glovebox — not required for `/v1/archives`
   today; revisit when glovebox extends mTLS to the bearer surface (tracked in
   the integration review §4.3).
