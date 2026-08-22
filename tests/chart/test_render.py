@@ -43,6 +43,13 @@ PERMUTATIONS = {
         "walhelmSource.enabled=true",
         "walhelmSource.subjectPrincipal=walhelm:test",
     ],
+    # Legacy single-namespace mode: everything lands in the release
+    # namespace, which enforces PSS=restricted, so no workload may render a
+    # privileged container or a hostPath mount here (C7).
+    "legacy_no_hardware": [
+        "hardware.enabled=false",
+        "networkPolicies.enabled=true",
+    ],
     "everything": [
         "hardware.enabled=true",
         "networkPolicies.enabled=true",
@@ -53,13 +60,15 @@ PERMUTATIONS = {
     ],
 }
 
-# The one workload this chart privileges on purpose: ARM needs
-# `privileged: true` + hostPath /dev in the hardware namespace to
+# The two workloads this chart privileges on purpose, and only in the
+# hardware namespace: ARM needs `privileged: true` + hostPath /dev to
 # self-discover the optical drive regardless of dynamic /dev/sr*, /dev/sg*
-# enumeration order (see networkpolicies-hardware.yaml and
-# optical-ripper/daemonset.yaml comments). Every other pod template must be
-# PSS=restricted-shaped.
-PRIVILEGED_EXCEPTION_COMPONENT = "optical-ripper"
+# enumeration order, and the document-scanner driver needs it for libusb to
+# claim the DS-1630's USB interface (see the daemonset.yaml comments in
+# both, and networkpolicies-hardware.yaml). Every other pod template must be
+# PSS=restricted-shaped -- and so must these two when hardware.enabled is
+# false, since the release namespace enforces PSS=restricted.
+PRIVILEGED_EXCEPTION_COMPONENTS = frozenset({"optical-ripper", "document-scanner"})
 
 DEAD_LETTER_METRIC = "capture_notification_dead_letter_total"
 DEAD_LETTER_ALERT = "NotificationDeadLetterBacklog"
@@ -189,29 +198,116 @@ def test_no_capture_namespace_fossils(renders):
 
 def test_pod_security_context_hardening(renders):
     """Every pod template sets securityContext.runAsNonRoot: true, except the
-    documented privileged optical-ripper pod. A new pod that lacks
-    runAsNonRoot and isn't labeled component=optical-ripper fails here
-    immediately -- this is the "new unhardened pod" guard.
+    documented privileged hardware-namespace pods. A new pod that lacks
+    runAsNonRoot and isn't one of those fails here immediately -- this is the
+    "new unhardened pod" guard. The exception is also scoped: it only applies
+    in the hardware namespace, so neither pod can drop its hardening while
+    rendering into the PSS=restricted release namespace.
     """
-    saw_documented_exception = False
+    seen_exceptions = set()
     for label, r in renders.items():
+        hardware_ns = "hardware.enabled=false" not in r["sets"]
         for d, ns, labels, pod_spec in _pod_templates(r["docs"]):
             comp = labels.get("app.kubernetes.io/component")
             sc = pod_spec.get("securityContext") or {}
             if sc.get("runAsNonRoot") is True:
                 continue
-            assert comp == PRIVILEGED_EXCEPTION_COMPONENT, (
+            assert comp in PRIVILEGED_EXCEPTION_COMPONENTS, (
                 f"[{label}] {_doc_label(d)} (component={comp!r}) does not set "
-                f"securityContext.runAsNonRoot: true and is not the documented "
-                f"privileged optical-ripper exception -- looks like a new "
+                f"securityContext.runAsNonRoot: true and is not one of the "
+                f"documented privileged workloads "
+                f"{sorted(PRIVILEGED_EXCEPTION_COMPONENTS)} -- looks like a new "
                 f"unhardened pod"
             )
-            saw_documented_exception = True
-    assert saw_documented_exception, (
-        "expected the optical-ripper pod's documented runAsNonRoot exception to "
-        "actually appear in at least one rendered permutation -- fixture or "
-        "chart behavior may have changed underneath this test"
+            # The scanner driver re-hardens when there is no hardware
+            # namespace to be privileged in. optical-ripper is deliberately
+            # not held to this: ARM's entrypoint requires root whichever
+            # namespace it lands in, so its legacy-mode pod cannot satisfy
+            # PSS=restricted at all -- a pre-existing reason to prefer
+            # hardware.enabled, not something this test can fix.
+            if comp == "document-scanner":
+                assert hardware_ns, (
+                    f"[{label}] {_doc_label(d)} drops runAsNonRoot while "
+                    f"hardware.enabled=false, i.e. in the PSS=restricted "
+                    f"release namespace -- the privileged exception only "
+                    f"holds in the hardware namespace"
+                )
+            seen_exceptions.add(comp)
+    assert seen_exceptions == PRIVILEGED_EXCEPTION_COMPONENTS, (
+        f"expected every documented runAsNonRoot exception "
+        f"{sorted(PRIVILEGED_EXCEPTION_COMPONENTS)} to actually appear in at "
+        f"least one rendered permutation, saw {sorted(seen_exceptions)} -- "
+        f"fixture or chart behavior may have changed underneath this test"
     )
+
+
+# -- C7 guard: hardware passthrough is real when on, absent when off --
+
+
+def test_document_scanner_hardware_passthrough(renders):
+    """With hardware.enabled=true the scanner driver must actually be able to
+    reach the DS-1630: privileged container + hostPath /dev, in the hardware
+    namespace. With it false, none of that may render (the release namespace
+    enforces PSS=restricted and would reject the pod).
+    """
+    for label, r in renders.items():
+        hardware_ns = "hardware.enabled=false" not in r["sets"]
+        found = False
+        for d, ns, labels, pod_spec in _pod_templates(r["docs"]):
+            if labels.get("app.kubernetes.io/component") != "document-scanner":
+                continue
+            found = True
+            containers = pod_spec.get("containers", [])
+            privileged = any(
+                (c.get("securityContext") or {}).get("privileged") is True for c in containers
+            )
+            dev_mounts = [
+                m
+                for c in containers
+                for m in (c.get("volumeMounts") or [])
+                if m.get("mountPath") == "/dev"
+            ]
+            host_dev_volumes = [
+                v
+                for v in (pod_spec.get("volumes") or [])
+                if (v.get("hostPath") or {}).get("path") == "/dev"
+            ]
+            if hardware_ns:
+                assert ns == "recognizer-hardware", (
+                    f"[{label}] scanner DaemonSet renders into namespace {ns!r}, "
+                    f"not the hardware namespace"
+                )
+                assert privileged, f"[{label}] scanner container is not privileged"
+                assert dev_mounts, f"[{label}] scanner container does not mount /dev"
+                assert host_dev_volumes, f"[{label}] scanner pod has no hostPath /dev volume"
+            else:
+                assert not privileged, (
+                    f"[{label}] scanner container is privileged with "
+                    f"hardware.enabled=false (release namespace is PSS=restricted)"
+                )
+                assert not dev_mounts and not host_dev_volumes, (
+                    f"[{label}] scanner pod mounts host /dev with "
+                    f"hardware.enabled=false"
+                )
+        assert found, f"[{label}] expected a rendered document-scanner pod template"
+
+
+def test_no_smarter_devices_claims_for_the_scanner(renders):
+    """The `smarter-devices/bus-usb: 1` limit never matched a real advertised
+    resource (the scanner's bus node is enumeration-dependent), so it only
+    ever made the DaemonSet unschedulable. hostPath /dev replaced it.
+    """
+    for label, r in renders.items():
+        for d, ns, labels, pod_spec in _pod_templates(r["docs"]):
+            if labels.get("app.kubernetes.io/component") != "document-scanner":
+                continue
+            for c in pod_spec.get("containers", []):
+                limits = (c.get("resources") or {}).get("limits") or {}
+                offending = [k for k in limits if str(k).startswith("smarter-devices/")]
+                assert not offending, (
+                    f"[{label}] scanner container claims {offending}, which "
+                    f"smarter-device-manager does not advertise for this device"
+                )
 
 
 def test_pod_automount_service_account_token_false(renders):
