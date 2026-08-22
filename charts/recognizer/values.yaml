@@ -233,6 +233,20 @@ archiveImporter:
   #   kubectl label ns recognizer name=openclaw-recognizer
   # Without that label glovebox's NetworkPolicy drops every packet at L4
   # and the client sees TCP timeouts, not HTTP 401s.
+  #
+  # Supported glovebox floor: app version 0.6.4 or later. Older versions
+  # (≤0.6.3) kill archive uploads >60s via a 60s ReadTimeout; multi-GB
+  # uploads fail with curl (55) broken pipe.
+  #
+  # mTLS covers /v1/ingest only; /v1/archives stays bearer-token auth.
+  # Before the operator flips ingest.tls.mode to `required`, verify the
+  # deployed glovebox contains the bearer-listener fix (planPlaintextListeners).
+  # Without it, /v1/archives goes offline and our uploads get connection-refused.
+  #
+  # Coming change: config.ingest.bearerPort will split /v1/archives onto
+  # its own listener (default 0 = shared 9091). When the operator sets it,
+  # update this url's port in the same maintenance window. Full URL is
+  # operator-configurable; no code change needed.
   gloveboxIngest:
     enabled: false
     url: "http://glovebox.glovebox.svc.cluster.local:9091"
@@ -302,6 +316,20 @@ walhelmSource:
   # walhelm-fetch always delivers (the three GLOVEBOX_INGEST_* env are
   # required by the binary), so there is no nested `enabled` toggle here --
   # the whole block is gated by walhelmSource.enabled.
+  #
+  # Supported glovebox floor: app version 0.6.4 or later. Older versions
+  # (≤0.6.3) kill archive uploads >60s via a 60s ReadTimeout; multi-GB
+  # uploads fail with curl (55) broken pipe.
+  #
+  # mTLS covers /v1/ingest only; /v1/archives stays bearer-token auth.
+  # Before the operator flips ingest.tls.mode to `required`, verify the
+  # deployed glovebox contains the bearer-listener fix (planPlaintextListeners).
+  # Without it, /v1/archives goes offline and our uploads get connection-refused.
+  #
+  # Coming change: config.ingest.bearerPort will split /v1/archives onto
+  # its own listener (default 0 = shared 9091). When the operator sets it,
+  # update this url's port in the same maintenance window. Full URL is
+  # operator-configurable; no code change needed.
   gloveboxIngest:
     url: "http://glovebox.glovebox.svc.cluster.local:9091"
     sourceID: "recognizer-walhelm"
