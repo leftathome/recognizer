@@ -10,7 +10,7 @@ metadata:
 data:
   config.yaml: |
     idle_timeout_seconds: 90
-    relay_url: "http://notification-relay.capture.svc.cluster.local:8080/event"
+    relay_url: {{ include "recognizer.relayUrl" . | quote }}
     scan_resolution: 600
     scan_color_mode: "Color"
     scan_format: "tiff"

@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "images", "optical-ripper", "hooks"))
 
-from post_rip import build_event, DISC_TYPE_MAP
+from post_rip import build_event, post_event, DISC_TYPE_MAP
 
 
 # -- Schema validation --
@@ -118,3 +118,18 @@ class TestBuildEvent:
         assert event["media_type"] == "data/iso"
         assert event["metadata"]["title"] is None
         assert event["metadata"]["year"] is None
+
+
+class TestPostEvent:
+
+    def test_missing_notify_webhook_raises_error(self):
+        """post_event() should raise ValueError when NOTIFY_WEBHOOK is not set."""
+        event = build_event(_base_env())
+        with pytest.raises(ValueError, match="NOTIFY_WEBHOOK environment variable must be set"):
+            post_event(event)
+
+    def test_empty_notify_webhook_raises_error(self):
+        """post_event() should raise ValueError when NOTIFY_WEBHOOK is empty."""
+        event = build_event(_base_env())
+        with pytest.raises(ValueError, match="NOTIFY_WEBHOOK environment variable must be set"):
+            post_event(event, relay_url="")

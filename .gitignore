@@ -11,3 +11,10 @@ __pycache__/
 
 # Claude Code worktrees (per-agent isolated working directories)
 .claude/worktrees/
+
+# Secret-shaped files must never be tracked
+*.key
+*.pem
+.env
+session.json
+.beads/.beads-credential-key

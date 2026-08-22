@@ -73,9 +73,11 @@ def post_event(event, relay_url=None):
         urllib.error.URLError on network failure.
     """
     if relay_url is None:
-        relay_url = os.environ.get(
-            "NOTIFY_WEBHOOK",
-            "http://notification-relay.capture.svc.cluster.local:8080/event",
+        relay_url = os.environ.get("NOTIFY_WEBHOOK", "").strip()
+
+    if not relay_url:
+        raise ValueError(
+            "NOTIFY_WEBHOOK environment variable must be set with a valid relay URL"
         )
 
     data = json.dumps(event).encode("utf-8")
@@ -94,6 +96,9 @@ if __name__ == "__main__":
     try:
         status = post_event(event)
         print(f"Notification sent: HTTP {status}")
+    except ValueError as e:
+        print(f"Configuration error: {e}", file=sys.stderr)
+        sys.exit(1)
     except (urllib.error.URLError, OSError) as e:
         print(f"Notification failed: {e}", file=sys.stderr)
         sys.exit(1)
