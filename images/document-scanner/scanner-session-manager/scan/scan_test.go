@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -275,40 +276,6 @@ func TestResolveDevice_AutoDetectError(t *testing.T) {
 	}
 }
 
-func TestStandardPageDimensions_600DPI(t *testing.T) {
-	w, h := StandardPageDimensions(600)
-	if w != 5100 {
-		t.Errorf("width: got %d, want 5100", w)
-	}
-	if h != 6600 {
-		t.Errorf("height: got %d, want 6600", h)
-	}
-}
-
-func TestStandardPageDimensions_300DPI(t *testing.T) {
-	w, h := StandardPageDimensions(300)
-	if w != 2550 {
-		t.Errorf("width: got %d, want 2550", w)
-	}
-	if h != 3300 {
-		t.Errorf("height: got %d, want 3300", h)
-	}
-}
-
-func TestSchemaColorMode(t *testing.T) {
-	cases := map[ScanMode]string{
-		ModeColor:   "color",
-		ModeGray:    "grayscale",
-		ModeLineart: "lineart",
-		ScanMode("Weird"): "weird",
-	}
-	for in, want := range cases {
-		if got := SchemaColorMode(in); got != want {
-			t.Errorf("SchemaColorMode(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestBuildArgs_DefaultParams(t *testing.T) {
 	p := DefaultParams()
 	p.Device = "testdev"
@@ -331,5 +298,76 @@ func TestBuildArgs_DefaultParams(t *testing.T) {
 		if args[i] != expected[i] {
 			t.Errorf("arg[%d]: got %q, want %q", i, args[i], expected[i])
 		}
+	}
+}
+
+func TestBuildBatchArgs(t *testing.T) {
+	p := Params{
+		Resolution: 300,
+		Mode:       ModeColor,
+		Source:     SourceADFDuplex,
+		Format:     FormatTIFF,
+		Device:     "epsonds:libusb:002:002",
+	}
+	args := BuildBatchArgs(p, "/out/scans/x/page_%02d.tiff")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--batch=/out/scans/x/page_%02d.tiff") {
+		t.Errorf("expected --batch= pattern, got %q", joined)
+	}
+	if strings.Contains(joined, "--output-file") {
+		t.Errorf("batch args must not use --output-file: %q", joined)
+	}
+	if !strings.Contains(joined, "--source ADF Duplex") {
+		t.Errorf("expected source, got %q", joined)
+	}
+}
+
+func TestScanBatch_TwoPages(t *testing.T) {
+	mock := &mockCommander{results: []mockResult{{
+		Stderr: []byte("Scanning page 1\nScanned page 1. (scanner status = 5)\n" +
+			"Scanning page 2\nScanned page 2. (scanner status = 5)\n" +
+			"Scanning page 3\nscanimage: sane_start: Document feeder out of documents\n"),
+		Err: fmt.Errorf("exit status 7"),
+	}}}
+	s := New(mock)
+	n, err := s.ScanBatch(context.Background(),
+		Params{Device: "d", Source: SourceADFDuplex, Mode: ModeColor, Format: FormatTIFF, Resolution: 300},
+		"/tmp/page_%02d.tiff")
+	if err != nil {
+		t.Fatalf("end-of-feed after pages must be nil error, got %v", err)
+	}
+	if n != 2 {
+		t.Errorf("got %d pages, want 2", n)
+	}
+}
+
+func TestScanBatch_EmptyFeeder(t *testing.T) {
+	mock := &mockCommander{results: []mockResult{{
+		Stderr: []byte("scanimage: sane_start: Document feeder out of documents\n"),
+		Err:    fmt.Errorf("exit status 7"),
+	}}}
+	s := New(mock)
+	n, err := s.ScanBatch(context.Background(),
+		Params{Device: "d", Source: SourceADFFront, Mode: ModeGray, Format: FormatTIFF, Resolution: 75},
+		"/tmp/page_%02d.tiff")
+	if n != 0 {
+		t.Errorf("got %d pages, want 0", n)
+	}
+	if !errors.Is(err, ErrFeederEmpty) {
+		t.Errorf("want ErrFeederEmpty, got %v", err)
+	}
+}
+
+func TestScanBatch_RealError(t *testing.T) {
+	mock := &mockCommander{results: []mockResult{{
+		Stderr: []byte("scanimage: open of device epsonds:libusb:002:002 failed: Invalid argument\n"),
+		Err:    fmt.Errorf("exit status 1"),
+	}}}
+	s := New(mock)
+	_, err := s.ScanBatch(context.Background(),
+		Params{Device: "d", Source: SourceADFFront, Mode: ModeGray, Format: FormatTIFF, Resolution: 75},
+		"/tmp/page_%02d.tiff")
+	if err == nil || errors.Is(err, ErrFeederEmpty) {
+		t.Errorf("want a real (non-empty) error, got %v", err)
 	}
 }

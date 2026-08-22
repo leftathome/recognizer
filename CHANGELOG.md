@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-22
+
+### Changed
+
+- **`document-scanner` is now a stateless driver (Slice 1, archiver-9aj)** --
+  the pod that owns the SANE device does one thing: a synchronous
+  `POST /scan` takes `source`/`mode`/`resolution`, scans, and writes raw
+  TIFFs to a fresh directory on the data volume. Flatbed yields one page;
+  ADF batch-scans until the feeder runs out, labelling duplex pages
+  front/back. An empty feeder is `422`, an unrecognised option is `400`, no
+  scanner is `503`, and a second concurrent scan is `409` (one device, one
+  scan at a time). The device is resolved per request, so a replugged
+  scanner recovers without a pod restart.
+- **`document-scanner` runs in `recognizer-hardware`** with a privileged
+  container and hostPath `/dev`, mirroring the optical-ripper passthrough,
+  gated on `hardware.enabled`. This is what lets libusb claim the DS-1630
+  regardless of the bus/device numbers it enumerates at. With
+  `hardware.enabled=false` the pod keeps its PSS=restricted shape and
+  reports no scanner.
+
+### Removed
+
+- **Scan sessions, manifests and notifications leave the driver** -- the
+  `session`, `notify`, `manifest` and `config` packages, the `/session/*`
+  and `/settings` endpoints, and the scanner ConfigMap. They are the
+  processor's concerns and return with it in Slice 2; the driver takes its
+  scan parameters per request and reads no config file.
+- **`smarter-devices/bus-usb: 1`** from `documentScanner.resources.limits`.
+  It named a resource smarter-device-manager never advertises for this
+  device, so it only ever kept the DaemonSet from scheduling.
+- **`imagemagick`** from the document-scanner image -- a processor
+  dependency the driver never invoked.
+
 ## [0.6.2] - 2026-06-13
 
 ### Fixed

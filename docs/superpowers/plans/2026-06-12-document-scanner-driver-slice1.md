@@ -14,6 +14,50 @@
 
 ---
 
+## Execution record — 2026-08-22
+
+Tasks 1-6 are implemented on `claude/glovebox-integration-review-heqi5p`
+(chart `0.7.0`). Task 7 is a manual, hardware-attached gate and is **not**
+done — it needs an operator at `johnny` after the tag ships (see below).
+
+The plan was written before packets C2 (scanner wired end-to-end) and B2/B6/
+B7/C6 landed, so what shipped differs from the text above in these ways:
+
+1. **`config/` was deleted too.** C2 added it after this plan was written; a
+   driver that takes every scan parameter per request has no config file to
+   read, so it follows `session`/`notify`/`manifest` to the processor. The
+   scanner ConfigMap and its `/etc/scanner` mount went with it (the plan
+   called pruning "preferred but not blocking").
+2. **`scan.StandardPageDimensions`, `scan.SchemaColorMode` and the `Status`
+   enum were deleted** for the same reason: they exist only to fill in a
+   manifest or a session state, and nothing in the driver calls them now.
+3. **The device override survived.** C2's `SCANNER_DEVICE` /
+   `SCANNER_DEVICE_NAME` escape hatch is kept as `Handler.DeviceOverride`,
+   set by `main.go`. `NewHandler`'s two-argument signature is unchanged, so
+   the plan's tests apply verbatim; detection still happens per request when
+   no override is set.
+4. **`POST /scan` answers 409 when the scanner is busy.** Not in the plan.
+   One physical device means one `scanimage` at a time; without this a
+   second request races the first for the USB handle.
+5. **The pod runs as root in hardware mode**, not as UID 1000. B2 hardened
+   this pod after the plan was written, and `privileged: true` alone does
+   not help a non-root process: capabilities are not in its permitted set,
+   so it cannot open the root-owned `/dev/bus/usb` node libusb needs. The
+   restricted context is retained on the `hardware.enabled=false` path.
+6. **C6's render tests were extended rather than left alone** — the C6 suite
+   post-dates this plan and pinned optical-ripper as the chart's only
+   privileged pod, so it would have failed on Task 5. It now carries a
+   `legacy_no_hardware` permutation plus passthrough and
+   no-smarter-devices-claims guards.
+
+Discovered, not fixed (belongs in the tracker, packet H2): the
+optical-ripper pod sets no `runAsNonRoot` even when `hardware.enabled=false`
+— ARM's entrypoint needs root in either namespace, so the legacy
+single-namespace path cannot satisfy PSS=restricted for that workload at
+all. Pre-existing, and its own argument for `hardware.enabled`.
+
+---
+
 ## File Structure
 
 Working dir for Go tasks: `images/document-scanner/scanner-session-manager/`
@@ -44,7 +88,7 @@ Working dir for Go tasks: `images/document-scanner/scanner-session-manager/`
 
 The existing `BuildArgs` emits `--output-file` (single page). ADF needs `--batch=<pattern>`. End-of-feed and empty-feeder are both reported by `scanimage` as a non-nil error with stderr containing `"out of documents"` — disambiguated by how many pages were already scanned (parsed from `"Scanned page N"` stderr lines). This is fully testable through the existing `mockCommander` (no exit code needed).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Append to `scan/scan_test.go`:
 
@@ -123,7 +167,7 @@ func TestScanBatch_RealError(t *testing.T) {
 
 Add `"errors"` to the test imports (alongside `context`, `fmt`, `strings`, `testing`).
 
-- [ ] **Step 2: Run tests, verify they fail**
+- [x] **Step 2: Run tests, verify they fail**
 
 ```bash
 cd images/document-scanner/scanner-session-manager
@@ -131,7 +175,7 @@ go test ./scan/ -run 'ScanBatch|BuildBatchArgs' -v
 ```
 Expected: FAIL (undefined: `BuildBatchArgs`, `ScanBatch`, `ErrFeederEmpty`).
 
-- [ ] **Step 3: Implement in `scan/scan.go`**
+- [x] **Step 3: Implement in `scan/scan.go`**
 
 Add `"bufio"`, `"bytes"`, `"errors"` to imports if not present (`bufio`/`bytes` already are; add `errors`). Append:
 
@@ -196,14 +240,14 @@ func (s *Scanner) ScanBatch(ctx context.Context, p Params, batchPattern string) 
 }
 ```
 
-- [ ] **Step 4: Run tests, verify pass**
+- [x] **Step 4: Run tests, verify pass**
 
 ```bash
 go test ./scan/ -v
 ```
 Expected: PASS (all scan tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scan/scan.go scan/scan_test.go
@@ -220,7 +264,7 @@ git commit -m "feat(scanner): add ScanBatch for ADF with empty/end-of-feed detec
 
 Drop the session manager and the `/session/*` + `/settings` routes. `NewHandler` takes `(scanner *scan.Scanner, outputBase string)`. `/scan` validates against the real enums (discrete resolution set), resolves the device per request, creates a per-scan dir, and scans (flatbed → single, ADF → batch). `/status` reports `device_present` + device.
 
-- [ ] **Step 1: Write the new test file**
+- [x] **Step 1: Write the new test file**
 
 Replace `web/web_test.go` entirely:
 
@@ -362,7 +406,7 @@ func TestStatus_DevicePresent(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests, verify they fail to compile**
+- [x] **Step 2: Run tests, verify they fail to compile**
 
 ```bash
 cd images/document-scanner/scanner-session-manager
@@ -370,7 +414,7 @@ go test ./web/ -v
 ```
 Expected: FAIL (build) — old `web.go` still has the session-based `NewHandler` signature and `scanResponse`/`statusResponse` differ.
 
-- [ ] **Step 3: Rewrite `web/web.go`**
+- [x] **Step 3: Rewrite `web/web.go`**
 
 Replace the file entirely:
 
@@ -564,14 +608,14 @@ func writeJSON(w http.ResponseWriter, code int, v interface{}) {
 }
 ```
 
-- [ ] **Step 4: Run tests, verify pass**
+- [x] **Step 4: Run tests, verify pass**
 
 ```bash
 go test ./web/ -v
 ```
 Expected: PASS. Note `go build ./...` will still fail here because `cmd/scanner/main.go` calls the old 3-arg `NewHandler` and imports `session`; `go test ./web/` compiles only `web`+`scan`, so it passes. **Do not commit yet** — Task 3 rewires `main.go` and deletes the orphaned packages so the *whole module* builds, and the two changes commit together (one bisect-clean commit).
 
-- [ ] **Step 5: Stage (do not commit yet)**
+- [x] **Step 5: Stage (do not commit yet)**
 
 ```bash
 git add web/web.go web/web_test.go
@@ -586,7 +630,7 @@ Continue straight to Task 3; the commit happens there.
 - Modify: `images/document-scanner/scanner-session-manager/cmd/scanner/main.go`
 - Delete: `session/`, `notify/`, `manifest/`
 
-- [ ] **Step 1: Rewrite `cmd/scanner/main.go`**
+- [x] **Step 1: Rewrite `cmd/scanner/main.go`**
 
 ```go
 // Command scanner is the document scanner driver entrypoint.
@@ -620,14 +664,14 @@ func main() {
 }
 ```
 
-- [ ] **Step 2: Delete the processor-only packages**
+- [x] **Step 2: Delete the processor-only packages**
 
 ```bash
 cd images/document-scanner/scanner-session-manager
 git rm -r session notify manifest
 ```
 
-- [ ] **Step 3: Verify the whole module builds, vets, and tests clean**
+- [x] **Step 3: Verify the whole module builds, vets, and tests clean**
 
 ```bash
 go build ./...
@@ -636,14 +680,14 @@ go test ./...
 ```
 Expected: all PASS, no references to `session`/`notify`/`manifest` remain.
 
-- [ ] **Step 4: Run staticcheck**
+- [x] **Step 4: Run staticcheck**
 
 ```bash
 staticcheck ./... || go run honnef.co/go/tools/cmd/staticcheck@latest ./...
 ```
 Expected: no findings. (If `rand.Read`'s ignored return is flagged, assign `_, _ = rand.Read(b)`.)
 
-- [ ] **Step 5: Commit (web rewrite + rewire + deletions together — bisect-clean)**
+- [x] **Step 5: Commit (web rewrite + rewire + deletions together — bisect-clean)**
 
 ```bash
 git add cmd/scanner/main.go web/web.go web/web_test.go scan/scan.go scan/scan_test.go
@@ -659,7 +703,7 @@ git commit -m "refactor(scanner): stateless driver (sync /scan, /status); strip 
 **Files:**
 - Modify: `images/document-scanner/Dockerfile`
 
-- [ ] **Step 1: Remove `imagemagick`** from the `apt-get install` list (leave `sane-utils`, `libsane-dev`, `curl`, `ca-certificates`). Result:
+- [x] **Step 1: Remove `imagemagick`** from the `apt-get install` list (leave `sane-utils`, `libsane-dev`, `curl`, `ca-certificates`). Result:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -672,7 +716,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 (Leave the commented `epsonscan2` block as-is — documented as unnecessary.)
 
-- [ ] **Step 2: Verify the image builds and scans are driven by the open backend**
+- [x] **Step 2: Verify the image builds and scans are driven by the open backend**
 
 ```bash
 cd /mnt/c/Users/steve/Code/recognizer
@@ -683,7 +727,7 @@ Expected: prints the `scanimage` path, no `convert`, then `OK`.
 
 > If no local Docker daemon is available (this repo builds via kaniko in CI), skip the local build and rely on the CI `build:document-scanner` job; the assertion to confirm is the same — `scanimage` present, `convert` (imagemagick) absent.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add images/document-scanner/Dockerfile
@@ -702,7 +746,7 @@ git commit -m "build(scanner): drop imagemagick from driver image (processor con
 
 Reference the working pattern in `charts/recognizer/templates/optical-ripper/daemonset.yaml` for exact gating syntax.
 
-- [ ] **Step 1: configmap.yaml + service.yaml namespace**
+- [x] **Step 1: configmap.yaml + service.yaml namespace**
 
 In each, change `namespace: {{ .Release.Namespace }}` to:
 ```yaml
@@ -711,7 +755,7 @@ In each, change `namespace: {{ .Release.Namespace }}` to:
 
 While in `configmap.yaml`, prune now-dead keys: the new env-only `main.go` reads none of the configmap (it's mounted at `/etc/scanner` but unused), so drop stale entries like `idle_timeout_seconds`, `device_name`, `relay_url`. Leave the configmap (and its mount) in place only if it still carries something live; otherwise it's harmless dead config — pruning is preferred but not blocking.
 
-- [ ] **Step 2: daemonset.yaml**
+- [x] **Step 2: daemonset.yaml**
 
 Change the `metadata.namespace` line the same way. Then, on the single container, add a privileged securityContext and a `/dev` mount, and add the hostPath volume — **all gated on `hardware.enabled`** (the namespace helper handles the legacy fallback on its own). Container spec gains:
 
@@ -738,11 +782,11 @@ and in the pod `volumes`:
         {{- end }}
 ```
 
-- [ ] **Step 3: values.yaml** — remove the dead `smarter-devices/bus-usb` limit from `documentScanner.resources.limits` (delete the comment block + the `smarter-devices/bus-usb: 1` line). The `limits` block becomes just `cpu`/`memory`.
+- [x] **Step 3: values.yaml** — remove the dead `smarter-devices/bus-usb` limit from `documentScanner.resources.limits` (delete the comment block + the `smarter-devices/bus-usb: 1` line). The `limits` block becomes just `cpu`/`memory`.
 
   > **Deviation from spec §4.1 (intentional):** the spec suggested mirroring optical-ripper by *conditionally re-adding* a `smarter-devices` limit under `hardware.enabled=false`. We drop it unconditionally instead: that per-device USB resource name never matched anyway (it's dynamically numbered), so legacy-mode USB passthrough is non-functional regardless, and `hardware.enabled` defaults true. Simpler and the acceptance criteria don't exercise legacy mode.
 
-- [ ] **Step 4: Verify renders (hardware.enabled=true)**
+- [x] **Step 4: Verify renders (hardware.enabled=true)**
 
 ```bash
 cd /mnt/c/Users/steve/Code/recognizer
@@ -755,7 +799,7 @@ Expected: `namespace: recognizer-hardware`, `privileged: true`, `path: /dev` all
 helm template r charts/recognizer --namespace recognizer --kube-version 1.34.0 --show-only templates/document-scanner/daemonset.yaml | grep smarter-devices || echo "no smarter-devices (correct)"
 ```
 
-- [ ] **Step 5: Verify renders (hardware.enabled=false — PSS-restricted safe)**
+- [x] **Step 5: Verify renders (hardware.enabled=false — PSS-restricted safe)**
 
 ```bash
 helm template r charts/recognizer --namespace recognizer --kube-version 1.34.0 --set hardware.enabled=false \
@@ -765,7 +809,7 @@ helm lint charts/recognizer
 ```
 Expected: no privileged/`/dev` in legacy mode; `helm lint` passes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add charts/recognizer/templates/document-scanner/ charts/recognizer/values.yaml
@@ -781,9 +825,9 @@ git commit -m "feat(chart): document-scanner privileged /dev passthrough in hard
 
 Without this, the deployed pod stays pinned to the **current** image/chart version (the `recognizer.image` helper defaults `documentScanner.image.tag` to `Chart.AppVersion`, currently `0.6.1`). CI only pushes a versioned image + chart OCI artifact on a `v*` tag, and Flux deploys the chart version. So new code on `main` alone will **not** reach johnny — the manual gate (Task 7) would keep testing the old stub. Every recent commit is a `release(chart):` bump for exactly this reason.
 
-- [ ] **Step 1:** Bump `charts/recognizer/Chart.yaml` — set both `version` and `appVersion` to `0.7.0` (next minor; this slice is a feature).
+- [x] **Step 1:** Bump `charts/recognizer/Chart.yaml` — set both `version` and `appVersion` to `0.7.0` (next minor; this slice is a feature).
 
-- [ ] **Step 2:** Verify the chart still renders/lints at the new version:
+- [x] **Step 2:** Verify the chart still renders/lints at the new version:
 ```bash
 helm lint charts/recognizer
 helm template r charts/recognizer --namespace recognizer --kube-version 1.34.0 >/dev/null && echo "renders OK"

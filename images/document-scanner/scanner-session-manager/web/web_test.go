@@ -1,342 +1,239 @@
 package web
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/leftathome/recognizer/images/document-scanner/scanner-session-manager/scan"
-	"github.com/leftathome/recognizer/images/document-scanner/scanner-session-manager/session"
 )
 
-// fakeCommander is a minimal scan.Commander fake for web package tests
-// (the scan package's own mockCommander is unexported and lives in a
-// different package).
-type fakeCommander struct {
-	calls    []string
-	failScan bool
-	devices  string // stdout for `scanimage -f '%d%n'`
+// webMock implements scan.Commander with scripted results.
+type webMock struct {
+	mu      sync.Mutex
+	results []mockResult
+	calls   [][]string
+	before  func() // optional hook run inside Run, before returning
+}
+type mockResult struct {
+	Stdout []byte
+	Stderr []byte
+	Err    error
 }
 
-func (f *fakeCommander) Run(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
-	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
-	for _, a := range args {
-		if a == "-f" {
-			return []byte(f.devices), nil, nil
-		}
+func (m *webMock) Run(_ context.Context, _ string, args ...string) ([]byte, []byte, error) {
+	m.mu.Lock()
+	m.calls = append(m.calls, args)
+	var r mockResult
+	if len(m.results) > 0 {
+		r = m.results[0]
+		m.results = m.results[1:]
 	}
-	if f.failScan {
-		return nil, []byte("scanimage: no paper in ADF\n"), fmt.Errorf("exit status 7")
+	before := m.before
+	m.mu.Unlock()
+	if before != nil {
+		before()
 	}
-	// Simulate scanimage writing the output file so manifest.Build (tested
-	// elsewhere) would find it.
-	for i, a := range args {
-		if a == "--output-file" && i+1 < len(args) {
-			_ = os.WriteFile(args[i+1], []byte("fake tiff bytes"), 0o644)
-		}
-	}
-	return nil, nil, nil
+	return r.Stdout, r.Stderr, r.Err
 }
 
-func defaultSettings() ScanSettings {
-	return ScanSettings{
-		ResolutionDPI: 600,
-		ColorMode:     scan.ModeColor,
-		Format:        scan.FormatTIFF,
-	}
+func (m *webMock) callArgs() [][]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
 }
 
-func setup(t *testing.T) (*Handler, *session.Manager) {
+func detectOK() mockResult {
+	return mockResult{Stdout: []byte("device `epsonds:libusb:002:002' is a Epson DS-1630 ESC/I-2\n")}
+}
+
+func newTestHandler(t *testing.T, m *webMock) *Handler {
 	t.Helper()
-	mgr := session.NewManager(session.Config{
-		BaseDir:     t.TempDir(),
-		IdleTimeout: 90 * time.Second,
-	})
-	scanner := scan.New(&fakeCommander{})
-	h := NewHandler(mgr, scanner, "epson-ds-1630", defaultSettings())
-	return h, mgr
+	return NewHandler(scan.New(m), t.TempDir())
+}
+
+func post(t *testing.T, h *Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/scan", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestScan_InvalidResolution(t *testing.T) {
+	h := newTestHandler(t, &webMock{})
+	rec := post(t, h, `{"source":"Flatbed","mode":"Color","resolution":250}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("250 dpi (in-range, not in set) must be 400, got %d", rec.Code)
+	}
+}
+
+func TestScan_InvalidSource(t *testing.T) {
+	h := newTestHandler(t, &webMock{})
+	rec := post(t, h, `{"source":"Telepathy","mode":"Color","resolution":300}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestScan_NoDevice(t *testing.T) {
+	m := &webMock{results: []mockResult{{Stdout: []byte("No scanners were identified.\n")}}}
+	h := newTestHandler(t, m)
+	rec := post(t, h, `{"source":"Flatbed","mode":"Color","resolution":300}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("want 503, got %d", rec.Code)
+	}
+}
+
+func TestScan_FlatbedSingle(t *testing.T) {
+	m := &webMock{results: []mockResult{detectOK(), {}}} // detect, then scan ok
+	h := newTestHandler(t, m)
+	rec := post(t, h, `{"source":"Flatbed","mode":"Color","resolution":300}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var resp scanResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Pages) != 1 || resp.Pages[0].Side != "single" {
+		t.Errorf("want 1 single page, got %+v", resp.Pages)
+	}
+	if resp.Device != "epsonds:libusb:002:002" {
+		t.Errorf("want resolved device, got %q", resp.Device)
+	}
+}
+
+func TestScan_ADFDuplexLabels(t *testing.T) {
+	m := &webMock{results: []mockResult{detectOK(), {
+		Stderr: []byte("Scanned page 1.\nScanned page 2.\nDocument feeder out of documents\n"),
+		Err:    fmt.Errorf("exit status 7"),
+	}}}
+	h := newTestHandler(t, m)
+	rec := post(t, h, `{"source":"ADF Duplex","mode":"Color","resolution":300}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var resp scanResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Pages) != 2 || resp.Pages[0].Side != "front" || resp.Pages[1].Side != "back" {
+		t.Errorf("want front,back, got %+v", resp.Pages)
+	}
+}
+
+func TestScan_EmptyFeeder(t *testing.T) {
+	m := &webMock{results: []mockResult{detectOK(), {
+		Stderr: []byte("Document feeder out of documents\n"),
+		Err:    fmt.Errorf("exit status 7"),
+	}}}
+	h := newTestHandler(t, m)
+	rec := post(t, h, `{"source":"ADF Front","mode":"Gray","resolution":300}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("empty feeder want 422, got %d", rec.Code)
+	}
+}
+
+func TestStatus_DevicePresent(t *testing.T) {
+	m := &webMock{results: []mockResult{detectOK()}}
+	h := newTestHandler(t, m)
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var resp statusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.DevicePresent || resp.Device != "epsonds:libusb:002:002" {
+		t.Errorf("want present+device, got %+v", resp)
+	}
+}
+
+// -- additions beyond the plan's test list --
+
+// The operator escape hatch C2 introduced (SCANNER_DEVICE) survives the
+// rewrite: an explicit device skips per-request `scanimage -L` entirely.
+func TestScan_DeviceOverrideSkipsDetection(t *testing.T) {
+	m := &webMock{results: []mockResult{{}}} // only the scan call is scripted
+	h := newTestHandler(t, m)
+	h.DeviceOverride = "epsonds:libusb:001:007"
+	rec := post(t, h, `{"source":"Flatbed","mode":"Color","resolution":600}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var resp scanResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Device != "epsonds:libusb:001:007" {
+		t.Errorf("want the override device, got %q", resp.Device)
+	}
+	calls := m.callArgs()
+	if len(calls) != 1 {
+		t.Fatalf("want exactly one scanimage call (the scan), got %d: %v", len(calls), calls)
+	}
+	if strings.Join(calls[0], " ") == "-L" {
+		t.Errorf("override must skip detection, but -L was called")
+	}
+}
+
+// One scanner, one scan at a time: a second request while the device is busy
+// gets 409 rather than racing scanimage for the USB handle.
+func TestScan_ConcurrentRequestIsBusy(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	m := &webMock{results: []mockResult{detectOK(), {}}}
+	m.before = func() {
+		// Only the scan call blocks; detection returns immediately.
+		if len(m.callArgs()) == 2 {
+			close(entered)
+			<-release
+		}
+	}
+	h := newTestHandler(t, m)
+
+	done := make(chan int, 1)
+	go func() {
+		done <- post(t, h, `{"source":"Flatbed","mode":"Color","resolution":300}`).Code
+	}()
+	<-entered
+
+	busy := post(t, h, `{"source":"Flatbed","mode":"Color","resolution":300}`)
+	if busy.Code != http.StatusConflict {
+		t.Errorf("second concurrent scan want 409, got %d (%s)", busy.Code, busy.Body.String())
+	}
+	close(release)
+	if code := <-done; code != http.StatusOK {
+		t.Errorf("first scan want 200, got %d", code)
+	}
 }
 
 func TestHealthz(t *testing.T) {
-	h, _ := setup(t)
-	req := httptest.NewRequest("GET", "/healthz", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
-	if body["status"] != "ok" {
-		t.Errorf("expected ok, got %s", body["status"])
+	h := newTestHandler(t, &webMock{})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d", rec.Code)
 	}
 }
 
-func TestStatus_Idle(t *testing.T) {
-	h, _ := setup(t)
-	req := httptest.NewRequest("GET", "/status", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var resp statusResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.State != "idle" {
-		t.Errorf("expected idle, got %s", resp.State)
-	}
-	if resp.Device != "epson-ds-1630" {
-		t.Errorf("expected epson-ds-1630, got %s", resp.Device)
-	}
-	if resp.CurrentSession != nil {
-		t.Error("expected nil current session")
-	}
-}
-
-func TestStatus_WithSession(t *testing.T) {
-	h, mgr := setup(t)
-	mgr.AddPage(session.InputFlatbed, false, "single")
-	mgr.AddPage(session.InputFlatbed, false, "single")
-
-	req := httptest.NewRequest("GET", "/status", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	var resp statusResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.State != "open" {
-		t.Errorf("expected open, got %s", resp.State)
-	}
-	if resp.CurrentSession == nil {
-		t.Fatal("expected current session")
-	}
-	if resp.CurrentSession.PageCount != 2 {
-		t.Errorf("expected 2 pages, got %d", resp.CurrentSession.PageCount)
-	}
-}
-
-func TestStatus_RecentSessions(t *testing.T) {
-	h, mgr := setup(t)
-	mgr.AddPage(session.InputADF, false, "single")
-	mgr.ADFComplete()
-
-	req := httptest.NewRequest("GET", "/status", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	var resp statusResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if len(resp.RecentSessions) != 1 {
-		t.Errorf("expected 1 recent session, got %d", len(resp.RecentSessions))
-	}
-}
-
-func TestScan_Post(t *testing.T) {
-	h, mgr := setup(t)
-	req := httptest.NewRequest("POST", "/scan", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var body map[string]interface{}
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if body["status"] != "scan complete" {
-		t.Errorf("status: got %v", body["status"])
-	}
-	if body["filename"] != "page_001.tiff" {
-		t.Errorf("filename: got %v", body["filename"])
-	}
-	if body["side"] != "single" {
-		t.Errorf("side: got %v", body["side"])
-	}
-	if body["input_method"] != "flatbed" {
-		t.Errorf("input_method: got %v", body["input_method"])
-	}
-
-	sess := mgr.Current()
-	if sess == nil || len(sess.Pages) != 1 {
-		t.Fatalf("expected 1 page in current session, got %+v", sess)
-	}
-	if _, err := os.Stat(filepath.Join(sess.OutputDir, "page_001.tiff")); err != nil {
-		t.Errorf("expected scanned file to exist: %v", err)
-	}
-}
-
-func TestScan_ADFDuplexRequestsCorrectSource(t *testing.T) {
-	h, mgr := setup(t)
-	body := bytes.NewBufferString(`{"input_method":"adf","duplex":true,"side":"front"}`)
-	req := httptest.NewRequest("POST", "/scan", body)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	sess := mgr.Current()
-	if sess == nil || sess.InputMethod != session.InputADF || !sess.Duplex {
-		t.Fatalf("expected open ADF duplex session, got %+v", sess)
-	}
-	if sess.Pages[0].Side != "front" {
-		t.Errorf("side: got %q, want front", sess.Pages[0].Side)
-	}
-}
-
-func TestScan_InvalidInputMethod(t *testing.T) {
-	h, _ := setup(t)
-	body := bytes.NewBufferString(`{"input_method":"carrier-pigeon"}`)
-	req := httptest.NewRequest("POST", "/scan", body)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 400 {
-		t.Errorf("expected 400, got %d", w.Code)
-	}
-}
-
-func TestScan_ScannerErrorMapsTo502(t *testing.T) {
-	mgr := session.NewManager(session.Config{BaseDir: t.TempDir(), IdleTimeout: 90 * time.Second})
-	scanner := scan.New(&fakeCommander{failScan: true})
-	h := NewHandler(mgr, scanner, "epson-ds-1630", defaultSettings())
-
-	req := httptest.NewRequest("POST", "/scan", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 502 {
-		t.Fatalf("expected 502, got %d: %s", w.Code, w.Body.String())
-	}
-	// The failed page must not linger in the session (it would otherwise
-	// break manifest building on close, since no file was written for it).
-	if sess := mgr.Current(); sess != nil && len(sess.Pages) != 0 {
-		t.Errorf("expected failed page to be removed, got %d pages", len(sess.Pages))
-	}
-}
-
-func TestScan_DeviceUnavailableMapsTo503(t *testing.T) {
-	mgr := session.NewManager(session.Config{BaseDir: t.TempDir(), IdleTimeout: 90 * time.Second})
-	// No device override and scanimage -f reports nothing -> auto-detect fails.
-	scanner := scan.New(&fakeCommander{devices: ""})
-	h := NewHandler(mgr, scanner, "", defaultSettings())
-
-	req := httptest.NewRequest("POST", "/scan", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 503 {
-		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestScan_AutoDetectsDeviceWhenNoOverride(t *testing.T) {
-	mgr := session.NewManager(session.Config{BaseDir: t.TempDir(), IdleTimeout: 90 * time.Second})
-	scanner := scan.New(&fakeCommander{devices: "epsonscan2:DS-1630:usb:04b8:0154\n"})
-	h := NewHandler(mgr, scanner, "", defaultSettings())
-
-	req := httptest.NewRequest("POST", "/scan", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// /status should now report the auto-detected device.
-	statusReq := httptest.NewRequest("GET", "/status", nil)
-	statusW := httptest.NewRecorder()
-	h.ServeHTTP(statusW, statusReq)
-	var resp statusResponse
-	json.Unmarshal(statusW.Body.Bytes(), &resp)
-	if resp.Device != "epsonscan2:DS-1630:usb:04b8:0154" {
-		t.Errorf("expected auto-detected device in status, got %q", resp.Device)
-	}
-}
-
-func TestScan_GetNotAllowed(t *testing.T) {
-	h, _ := setup(t)
-	req := httptest.NewRequest("GET", "/scan", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 405 {
-		t.Errorf("expected 405, got %d", w.Code)
-	}
-}
-
-func TestCloseSession_NoSession(t *testing.T) {
-	h, _ := setup(t)
-	req := httptest.NewRequest("POST", "/session/close", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-	if body["status"] != "no active session" {
-		t.Errorf("expected 'no active session', got %v", body["status"])
-	}
-}
-
-func TestCloseSession_WithSession(t *testing.T) {
-	h, mgr := setup(t)
-	mgr.AddPage(session.InputFlatbed, false, "single")
-
-	req := httptest.NewRequest("POST", "/session/close", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-	if body["status"] != "session closed" {
-		t.Errorf("expected 'session closed', got %v", body["status"])
-	}
-	if mgr.State() != session.StateIdle {
-		t.Error("session should be idle after close")
-	}
-}
-
-func TestNewDocument(t *testing.T) {
-	h, mgr := setup(t)
-	mgr.AddPage(session.InputFlatbed, false, "single")
-
-	req := httptest.NewRequest("POST", "/session/new-document", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-	if body["status"] != "document boundary created" {
-		t.Errorf("expected 'document boundary created', got %v", body["status"])
-	}
-}
-
-func TestStatus_MethodNotAllowed(t *testing.T) {
-	h, _ := setup(t)
-	req := httptest.NewRequest("POST", "/status", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != 405 {
-		t.Errorf("expected 405, got %d", w.Code)
+// The retired session API must not answer any more -- a stale caller should
+// get a clean 404, not a half-working endpoint.
+func TestRetiredSessionRoutesAreGone(t *testing.T) {
+	h := newTestHandler(t, &webMock{})
+	for _, path := range []string{"/session/close", "/session/new-document", "/settings"} {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s: want 404 after the driver/processor split, got %d", path, rec.Code)
+		}
 	}
 }

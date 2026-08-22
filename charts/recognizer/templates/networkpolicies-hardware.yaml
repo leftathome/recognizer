@@ -19,8 +19,11 @@ spec:
       app.kubernetes.io/part-of: recognizer
   egress:
     # notification-relay lives in the release namespace, not the hardware
-    # namespace. The post-rip hook (C1) and the scanner's OnClose notify()
-    # call both cross that namespace boundary to reach it on :8080.
+    # namespace. The post-rip hook (C1) crosses that namespace boundary to
+    # reach it on :8080. The scanner driver does not talk to the relay at
+    # all any more -- since the driver/processor split it only writes files
+    # and answers HTTP; the processor will emit its events from the release
+    # namespace.
     - toEndpoints:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: {{ .Release.Namespace }}
@@ -49,9 +52,10 @@ spec:
             - port: "53"
               protocol: TCP
   ingress:
-    # ARM's web UI (optical-ripper :8080) is reachable from the release
-    # namespace only (e.g. an operator port-forwarding via a release-ns
-    # pod, or a future in-cluster proxy). No other source is permitted.
+    # ARM's web UI and the scanner driver's /scan API (both :8080) are
+    # reachable from the release namespace only (e.g. an operator
+    # port-forwarding via a release-ns pod, or the future processor driving
+    # the scanner). No other source is permitted.
     - fromEndpoints:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: {{ .Release.Namespace }}

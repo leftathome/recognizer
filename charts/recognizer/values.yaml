@@ -113,10 +113,12 @@ documentScanner:
     limits:
       cpu: 500m
       memory: 512Mi
-      # Reserve one USB bus on the node via smarter-device-manager.
-      # Without this, the pod schedules but the scanner hardware is
-      # not passed through. Matches source manifests/document-scanner/daemonset.yaml.
-      smarter-devices/bus-usb: 1
+      # No smarter-devices claim here. The old `smarter-devices/bus-usb: 1`
+      # limit never passed the scanner through: smarter-device-manager
+      # advertises per-node-path resources and the scanner's USB bus node is
+      # enumeration-dependent, so the name never matched. The driver reaches
+      # the device via hostPath /dev in the hardware namespace instead (see
+      # document-scanner/daemonset.yaml).
   # Pins to nodes labeled by NFD when the Epson DS-1630 USB device is plugged in.
   # See gitops configmap-nfd-worker-recognizer.yaml for the NFD rule that
   # generates this label. Override this selector to support additional scanner
