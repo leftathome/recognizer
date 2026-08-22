@@ -1,0 +1,320 @@
+name: CI
+
+# GitHub Actions mirror of .gitlab-ci.yml, following glovebox's CI pattern
+# (least-privilege permissions, gated publish jobs, multi-arch buildx to
+# GHCR, OCI chart push). GitLab remains the homelab deploy target; while
+# development happens against GitHub this workflow is the authoritative
+# gate. Divergences from the GitLab pipeline are deliberate and commented
+# where they occur -- the big one is walhelm: the private walhelm-go dep's
+# only remote is gitlab.orac.local, unreachable from GitHub-hosted runners,
+# so the walhelm packages are tested and the walhelm-fetch image is built
+# only on GitLab (see the test-go matrix and the build-docker matrix).
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    # A stacked pull request targets the branch below it, not main. With a
+    # `[main]`-only filter no workflow runs against it at all, so it sits
+    # with an empty check list that reads as "nothing failed". Matching
+    # claude/** as well means every link in a stack is actually tested.
+    # (Same rationale as glovebox's ci.yml.)
+    branches: [main, "claude/**"]
+
+# Least privilege at the top level: the test jobs execute code from pull
+# requests and only need to read the repo. Publishing tokens (packages) are
+# granted per job to the ones that push images or charts, all gated on
+# `github.event_name == 'push'`.
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  # Images publish as ghcr.io/leftathome/recognizer/<component>, matching
+  # the chart's image.registry + image.repository split in values.yaml.
+  IMAGE_PREFIX: ghcr.io/leftathome/recognizer
+
+jobs:
+  test-python:
+    # Schema/relay/hook unit tests plus the chart render-assertion suite
+    # (tests/chart needs a real helm binary on PATH or it self-skips --
+    # installing helm here is what makes those assertions actually gate).
+    name: Test (python + chart render)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Install test dependencies
+        run: pip install -r requirements.txt
+
+      - name: Pytest (schemas, relay, hooks, chart render)
+        run: pytest tests/ -v --tb=short
+
+  test-go:
+    name: Test (go ${{ matrix.name }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: scanner-session-manager
+            module: images/document-scanner/scanner-session-manager
+            packages: ./...
+          - name: archive-importer
+            module: images/archive-importer
+            # Everything except ./internal/walhelm and ./cmd/walhelm-fetch:
+            # those import the private walhelm-go module, whose only remote
+            # is gitlab.orac.local (unreachable from GitHub-hosted runners,
+            # token or not -- the vanity path github.com/leftathome/walhelm-go
+            # does not resolve on GitHub). The walhelm packages stay covered
+            # by GitLab CI's test:go:archive-importer. If walhelm-go ever
+            # gets a GitHub-reachable remote, collapse this back to ./... .
+            packages: >-
+              ./internal/delivery/... ./internal/ident/... ./internal/lock/...
+              ./internal/manifest/... ./internal/matcher/... ./internal/relay/...
+              ./internal/unpacker/... ./cmd/archive-importer/...
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      # The manifest writer's TestWrite_ProducesSchemaValidJSON shells out
+      # to `python3 -m jsonschema` and soft-skips when the import fails; we
+      # want it actually running here, same as GitLab CI.
+      - name: Install jsonschema for the manifest schema test
+        run: pip install jsonschema
+
+      - name: Vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ${{ matrix.packages }}
+
+      - name: Test
+        working-directory: ${{ matrix.module }}
+        run: go test ${{ matrix.packages }} -count=1 -race
+
+  security:
+    name: Security scanning
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: [test-go]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: |
+            images/archive-importer/go.sum
+            images/document-scanner/scanner-session-manager/go.sum
+
+      # Pinned to v1.5.0 for the same reason as glovebox (glovebox-fslv):
+      # v1.4.0 segfaulted on generics under go1.26, and @latest would let a
+      # future tool regression silently re-break the gate. setup-go "1.26"
+      # resolves the newest 1.26.x patch, which is what cleared the stdlib
+      # crypto/x509 finding that blocked the v0.5.0 release (archiver-850).
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
+
+      - name: govulncheck (scanner-session-manager)
+        working-directory: images/document-scanner/scanner-session-manager
+        run: govulncheck ./...
+
+      - name: govulncheck (archive-importer, walhelm-free packages)
+        working-directory: images/archive-importer
+        # Same package subset as test-go and for the same reason.
+        run: >-
+          govulncheck ./internal/delivery/... ./internal/ident/...
+          ./internal/lock/... ./internal/manifest/... ./internal/matcher/...
+          ./internal/relay/... ./internal/unpacker/... ./cmd/archive-importer/...
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+
+  helm:
+    name: Lint, validate, package Helm chart
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push the chart to ghcr on push events
+    needs: [test-python]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Install kubeconform
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | sudo tar xz -C /usr/local/bin/ kubeconform
+
+      - name: Helm lint (strict)
+        run: helm lint charts/recognizer --strict
+
+      # Pin --kube-version to the actual orac cluster version; helm's
+      # offline `template` otherwise defaults to whatever is compiled into
+      # the binary. Validate the default render AND the all-features render
+      # so opt-in objects (glovebox ingest, walhelm, hardware policies) are
+      # schema-checked too -- the GitLab job only covers the default.
+      - name: kubeconform (default render)
+        run: >-
+          helm template recognizer charts/recognizer
+          --kube-version 1.34.0 --namespace recognizer
+          | kubeconform -strict -summary -ignore-missing-schemas
+          -schema-location default
+          -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+      - name: kubeconform (all features enabled)
+        run: >-
+          helm template recognizer charts/recognizer
+          --kube-version 1.34.0 --namespace recognizer
+          --set hardware.enabled=true --set networkPolicies.enabled=true
+          --set archiveImporter.enabled=true
+          --set archiveImporter.gloveboxIngest.enabled=true
+          --set walhelmSource.enabled=true
+          --set walhelmSource.subjectPrincipal=walhelm:test
+          | kubeconform -strict -summary -ignore-missing-schemas
+          -schema-location default
+          -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+      # On a v* tag, stamp chart version + appVersion from the tag so the
+      # published chart always tracks the release (glovebox learned this the
+      # hard way -- see its ci.yml). Branch/PR builds package with
+      # 0.0.0-sha<short-sha>: an alphanumeric pre-release identifier, because
+      # SemVer forbids leading zeros in all-digit identifiers and short SHAs
+      # can start with 0 (same rationale as .gitlab-ci.yml).
+      - name: Package Helm chart
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            V="${GITHUB_REF#refs/tags/v}"
+          else
+            V="0.0.0-sha$(git rev-parse --short HEAD)"
+          fi
+          echo "Packaging chart at version ${V}"
+          helm package charts/recognizer --version "${V}" --app-version "${V}" --destination .
+          ls -lh recognizer-*.tgz
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Helm chart to GHCR
+        if: github.event_name == 'push'
+        run: helm push recognizer-*.tgz oci://${{ env.IMAGE_PREFIX }}/charts
+
+  build-docker:
+    name: Docker (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    # Container publishing only matters against main. On a stacked PR (base
+    # claude/**) this would be a second full matrix for a diff the
+    # main-targeted PR at the bottom of the stack already covers, so skip it
+    # and let the fast checks carry the stack. (Glovebox's rationale.)
+    if: github.event_name == 'push' || github.base_ref == 'main'
+    permissions:
+      contents: read
+      packages: write   # push images to ghcr
+      id-token: write   # actions/attest-build-provenance (via buildx provenance)
+      attestations: write
+    needs: [test-python, test-go]
+    strategy:
+      fail-fast: false
+      # walhelm-fetch is deliberately absent: its build stage must fetch the
+      # private walhelm-go module from gitlab.orac.local, which GitHub-hosted
+      # runners cannot reach. That image continues to build on GitLab
+      # (build:walhelm-fetch in .gitlab-ci.yml). Add it here only once
+      # walhelm-go has a GitHub-reachable remote or a self-hosted runner
+      # inside the homelab picks these jobs up.
+      matrix:
+        include:
+          - image: document-scanner
+            dockerfile: images/document-scanner/Dockerfile
+          - image: notification-relay
+            dockerfile: images/notification-relay/Dockerfile
+          - image: archive-importer
+            dockerfile: images/archive-importer/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+
+      # Multi-arch on purpose: the GitLab kaniko path is amd64-only (runner
+      # not privileged, gitops-vney), which is why the chart pins CronJobs
+      # to amd64 nodes. Images published from here lift that constraint for
+      # GHCR consumers; the chart's nodeSelector stays until the fleet runs
+      # these images everywhere.
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max

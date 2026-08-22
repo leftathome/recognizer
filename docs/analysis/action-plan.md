@@ -58,6 +58,7 @@ DONE packet landed as its own commit (grep the log for `[<ID>]`).
 | C7 | Scanner driver/processor split — Slice 1 | P2 | opus/sonnet, phased | C2 | ❌ large; own PR |
 | C8 | Schema: `disc-detected`/`disc-ejected` events (`archiver-9xw`) | P3 | sonnet | — | ✅ DONE |
 | H1 | Unblock CI (`archiver-850`): go1.26.4 bump + pypi→apt jsonschema | P1 | sonnet | — | ⚠️ changes landed; **pipeline verification pending on GitLab** |
+| H4 | GitHub Actions CI (glovebox's pattern) while developing against GitHub | P1 | orchestrator | — | ✅ DONE — `.github/workflows/{ci,codeql,release}.yml`: tests (python+chart render, both Go modules), govulncheck+trivy, helm lint/kubeconform/OCI chart push, multi-arch images to `ghcr.io/leftathome/recognizer/*`, tag-driven release. Walhelm packages/image excluded (private dep only reachable from gitlab.orac.local) — GitLab CI remains their gate |
 | H2 | Tracker reconciliation: re-open/annotate misclosed beads, file new ones | P2 | operator/orchestrator | bd available | ❌ needs `bd` (unavailable in the fleet's environment) |
 | H3 | Verify gitops-side artifacts (NFD rules incl. USB class 06, SDM, Flux HelmRelease, ns label) | P1 | operator | gitops repo access | ❌ cross-repo |
 
