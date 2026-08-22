@@ -8,9 +8,10 @@ metadata:
     {{- include "recognizer.labels" . | nindent 4 }}
     app.kubernetes.io/component: walhelm-fetch
 data:
-  # Non-secret env. The session JSON (secret) is mounted from the
-  # ExternalSecret-backed Secret; the glovebox bearer token (secret) comes
-  # from its own ExternalSecret via secretKeyRef in the CronJob.
+  # Non-secret env. The session JSON (secret) and the glovebox bearer
+  # token (secret) are both mounted read-only from their own
+  # ExternalSecret-backed Secrets in the CronJob -- the token as a file
+  # (GLOVEBOX_INGEST_TOKEN_FILE, re-read per delivery), not env.
   WALHELM_SESSION_FILE: {{ printf "%s/%s" .Values.walhelmSource.sessionMountPath .Values.walhelmSource.sessionFileName | quote }}
   WALHELM_SUBJECT_PRINCIPAL: {{ required "walhelmSource.subjectPrincipal is required when walhelmSource.enabled=true" .Values.walhelmSource.subjectPrincipal | quote }}
   WALHELM_STATE_DIR: {{ .Values.walhelmSource.stateDir | quote }}

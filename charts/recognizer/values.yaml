@@ -130,6 +130,15 @@ notificationRelay:
     name: notification-relay
     tag: ""
   replicaCount: 2
+  # Bounded in-memory queue between the HTTP handler and the delivery
+  # worker pool (images/notification-relay/relay/main.py RelayServer).
+  # Past this many events waiting for a worker, new ones are dead-lettered
+  # immediately instead of blocking the request thread. Matches the code's
+  # own RELAY_QUEUE_MAX default -- set here so it's tunable per release
+  # without touching the image.
+  queueMax: 1000
+  # Background worker threads draining the delivery queue (RELAY_WORKERS).
+  workers: 2
   resources:
     requests:
       cpu: 50m
@@ -137,6 +146,35 @@ notificationRelay:
     limits:
       cpu: 250m
       memory: 256Mi
+  # Dead-letter directory behavior, shared between the relay Deployment
+  # (which writes dead-letters on delivery failure / queue-full) and the
+  # drain CronJob below (which re-delivers and deletes them, or ages them
+  # out). See images/notification-relay/relay/deadletter.py and drain.py.
+  deadLetter:
+    # Refuse new dead-letter writes once the directory holds this many
+    # files (RELAY_DEADLETTER_MAX) -- caps growth on the shared PVC.
+    maxFiles: 10000
+    # Hourly CronJob that re-POSTs each dead-lettered event to the
+    # configured destinations, deleting the file on full success and
+    # leaving it in place (for the next run) on any destination failure.
+    drain:
+      enabled: true
+      schedule: "0 * * * *"   # hourly
+      suspend: false
+      # Age out (delete, loudly logged) dead-letter files older than this
+      # many days instead of retrying them forever (RELAY_DEADLETTER_MAX_AGE_DAYS).
+      maxAgeDays: 14
+      # Cap on files touched per run (RELAY_DRAIN_BATCH), so a large
+      # backlog can't make one invocation run unboundedly long -- the
+      # remainder waits for the next scheduled fire.
+      batchSize: 500
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
 
 opticalRipper:
   enabled: true
@@ -233,6 +271,20 @@ archiveImporter:
   #   kubectl label ns recognizer name=openclaw-recognizer
   # Without that label glovebox's NetworkPolicy drops every packet at L4
   # and the client sees TCP timeouts, not HTTP 401s.
+  #
+  # Supported glovebox floor: app version 0.6.4 or later. Older versions
+  # (≤0.6.3) kill archive uploads >60s via a 60s ReadTimeout; multi-GB
+  # uploads fail with curl (55) broken pipe.
+  #
+  # mTLS covers /v1/ingest only; /v1/archives stays bearer-token auth.
+  # Before the operator flips ingest.tls.mode to `required`, verify the
+  # deployed glovebox contains the bearer-listener fix (planPlaintextListeners).
+  # Without it, /v1/archives goes offline and our uploads get connection-refused.
+  #
+  # Coming change: config.ingest.bearerPort will split /v1/archives onto
+  # its own listener (default 0 = shared 9091). When the operator sets it,
+  # update this url's port in the same maintenance window. Full URL is
+  # operator-configurable; no code change needed.
   gloveboxIngest:
     enabled: false
     url: "http://glovebox.glovebox.svc.cluster.local:9091"
@@ -240,11 +292,33 @@ archiveImporter:
     # test uses "recognizer-smoke-test"; production uses whatever you
     # negotiated with the glovebox operator.
     sourceID: "recognizer-smoke-test"
+    # Egress target for the CiliumNetworkPolicy (networkpolicies.yaml). Must
+    # track the host:port in `url` above -- when the operator lands the
+    # bearerPort migration noted above and moves /v1/archives off the shared
+    # 9091 listener, update `port` here in the same maintenance window.
+    egress:
+      namespace: glovebox
+      port: 9091
     vault:
       refreshInterval: "1m"
       secretStoreRef:
         name: "vault-backend"
         kind: "ClusterSecretStore"
+    # Forward wiring for the day glovebox's bearer listener requires TLS
+    # (server side is plaintext today; see
+    # docs/analysis/glovebox-integration-review.md §7). Both fields
+    # render nothing when left at their defaults, so the default render
+    # stays byte-identical.
+    tls:
+      # Name of a ConfigMap (in this namespace) holding the private CA
+      # PEM the client should trust in addition to the system roots.
+      # Mounted read-only and wired to GLOVEBOX_INGEST_CA_FILE when set.
+      caConfigMap: ""
+      # Key inside caConfigMap holding the PEM bundle.
+      caKey: "ca.crt"
+      # When true, sets GLOVEBOX_INGEST_REQUIRE_TLS=true, which refuses
+      # to run the binary against an http:// gloveboxIngest.url.
+      requireTLS: false
 
 # ============================================================================
 # walhelm-source (spec 04 / SP3): a SUSPENDED CronJob that runs walhelm-fetch
@@ -302,11 +376,47 @@ walhelmSource:
   # walhelm-fetch always delivers (the three GLOVEBOX_INGEST_* env are
   # required by the binary), so there is no nested `enabled` toggle here --
   # the whole block is gated by walhelmSource.enabled.
+  #
+  # Supported glovebox floor: app version 0.6.4 or later. Older versions
+  # (≤0.6.3) kill archive uploads >60s via a 60s ReadTimeout; multi-GB
+  # uploads fail with curl (55) broken pipe.
+  #
+  # mTLS covers /v1/ingest only; /v1/archives stays bearer-token auth.
+  # Before the operator flips ingest.tls.mode to `required`, verify the
+  # deployed glovebox contains the bearer-listener fix (planPlaintextListeners).
+  # Without it, /v1/archives goes offline and our uploads get connection-refused.
+  #
+  # Coming change: config.ingest.bearerPort will split /v1/archives onto
+  # its own listener (default 0 = shared 9091). When the operator sets it,
+  # update this url's port in the same maintenance window. Full URL is
+  # operator-configurable; no code change needed.
   gloveboxIngest:
     url: "http://glovebox.glovebox.svc.cluster.local:9091"
     sourceID: "recognizer-walhelm"
+    # Egress target for the CiliumNetworkPolicy (networkpolicies.yaml). Must
+    # track the host:port in `url` above -- when the operator lands the
+    # bearerPort migration noted above and moves /v1/archives off the shared
+    # 9091 listener, update `port` here in the same maintenance window.
+    egress:
+      namespace: glovebox
+      port: 9091
     vault:
       refreshInterval: "1m"
       secretStoreRef:
         name: "vault-backend"
         kind: "ClusterSecretStore"
+    # Forward wiring for the day glovebox's bearer listener requires TLS
+    # (server side is plaintext today; see
+    # docs/analysis/glovebox-integration-review.md §7). Both fields
+    # render nothing when left at their defaults, so the default render
+    # stays byte-identical.
+    tls:
+      # Name of a ConfigMap (in this namespace) holding the private CA
+      # PEM the client should trust in addition to the system roots.
+      # Mounted read-only and wired to GLOVEBOX_INGEST_CA_FILE when set.
+      caConfigMap: ""
+      # Key inside caConfigMap holding the PEM bundle.
+      caKey: "ca.crt"
+      # When true, sets GLOVEBOX_INGEST_REQUIRE_TLS=true, which refuses
+      # to run the binary against an http:// gloveboxIngest.url.
+      requireTLS: false

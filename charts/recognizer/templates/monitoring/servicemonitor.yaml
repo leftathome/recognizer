@@ -15,9 +15,15 @@ spec:
     matchNames:
       - {{ .Release.Namespace }}
   endpoints:
-    - port: web-ui
-      interval: 30s
-      path: /metrics
+    # Only the notification-relay's "http" port (release namespace) serves
+    # Prometheus text exposition today (relay/metrics.py, C4). The
+    # optical-ripper (ARM) and document-scanner Services both also name a
+    # port "web-ui", but that's each workload's own operator-facing web
+    # interface, not a /metrics endpoint -- scraping it 404s. Dropped per
+    # the C4 metrics audit (docs/analysis/action-plan.md); re-add a
+    # web-ui-labeled endpoint here (with its own namespaceSelector entry for
+    # the hardware namespace, since optical-ripper lives there) if/when one
+    # of those workloads grows a real metrics surface.
     - port: http
       interval: 30s
       path: /metrics

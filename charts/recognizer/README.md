@@ -9,7 +9,7 @@ opt-in monitoring.
 |---|---|---|
 | `document-scanner` | DaemonSet (per node with USB scanner) | SANE wrapper + session manager; emits scan-session manifests |
 | `notification-relay` | Deployment (2 replicas by default) | Validates capture events against JSON Schema, fans out to webhooks |
-| `optical-ripper` | DaemonSet (per node with USB optical drive) | Wraps Automatic Ripping Machine; post-rip hook posts to the relay |
+| `optical-ripper` | DaemonSet (per node with USB optical drive) | Wraps Automatic Ripping Machine; post-rip hook (via ARM's `BASH_SCRIPT`, hardware-namespace mode only) posts a completion event to the relay |
 | `archive-importer` | Suspended CronJob template (promoted to a Job per spec 03 § 8.1) | Imports finished digital archives (Google Takeout in v0.2.0); emits per-subtree notification events |
 
 The `incoming` PVC is shared across all four so finished captures and
@@ -105,6 +105,34 @@ opticalRipper:
 Override these to support additional models. The NFD rule set in
 `gitops/.../configmap-nfd-worker.yaml` is the source of truth for which
 label values are generated for which USB vendor:device pairs.
+
+### Glovebox compatibility
+
+When `archiveImporter.gloveboxIngest.enabled: true` or
+`walhelmSource.enabled: true` (both use glovebox archive delivery), ensure
+the deployed glovebox meets the following compatibility requirements:
+
+- **Minimum app version:** 0.6.4 or later. Older versions (≤0.6.3) enforce a
+  60s `ReadTimeout` that kills multi-GB archive uploads with `curl (55) broken
+  pipe`.
+
+- **mTLS precondition:** Before the operator sets `ingest.tls.mode: required`,
+  verify the glovebox deployment includes the bearer-listener fix
+  (`planPlaintextListeners`). Without it, `/v1/archives` goes offline and
+  uploads fail with connection-refused.
+
+- **Port migration:** A coming `config.ingest.bearerPort` split will move
+  `/v1/archives` off the shared port 9091. When the operator configures it,
+  coordinate a maintenance window and update `gloveboxIngest.url` to reflect
+  the new port in both `archiveImporter` and `walhelmSource` blocks.
+
+- **Vault TLS:** If the glovebox operator upgrades to a version with
+  `tlsSkipVerify: false` (flip from the current `true`), and their Vault uses
+  a self-signed CA without a `caSecret` configured, token resolution fails
+  (uploads will 401/503). Confirm `caSecret` is set before they upgrade.
+
+See [../../docs/analysis/glovebox-integration-review.md](../../docs/analysis/glovebox-integration-review.md)
+for detailed integration context and upstream issues.
 
 ## Design background
 

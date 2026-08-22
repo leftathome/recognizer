@@ -2,15 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://openclaw.io/schemas/capture/notification-event.v1.1.schema.json",
   "title": "Capture Notification Event v1.1",
-  "description": "Additive extension of v1.0 (notification-event.v1.schema.json) to accommodate archive-importer workloads (spec 03). v1.0 events continue to validate against this schema; producers stamp schema_version=1.1 only when emitting archive-related events.",
+  "description": "Additive extension of v1.0 (notification-event.v1.schema.json) to accommodate archive-importer workloads (spec 03). v1.0 events continue to validate against this schema; producers stamp schema_version=1.1 only when emitting archive-related events. Further additive-in-place update (bead archiver-9xw, no version bump -- see the v1->v1.1 precedent this follows): event_type gains disc-detected/disc-ejected so the optical-ripper tender loop can announce disc lifecycle before any output exists. Because those two event types fire before a rip has produced an output_path/media_type, the top-level `required` list only lists the fields common to every event type; the `allOf` block below conditionally requires output_path+media_type for all OTHER (existing) event types, so existing event types keep their exact original requirements unchanged.",
   "type": "object",
   "required": [
     "schema_version",
     "source",
     "event_type",
     "timestamp",
-    "output_path",
-    "media_type",
     "metadata",
     "node_name"
   ],
@@ -39,9 +37,11 @@
         "scan-session-complete",
         "archive-unpacked",
         "archive-subtree-recognized",
-        "archive-import-complete"
+        "archive-import-complete",
+        "disc-detected",
+        "disc-ejected"
       ],
-      "description": "The type of event. v1.0: disc-extraction-complete, scan-session-complete. v1.1 adds the archive-* event types."
+      "description": "The type of event. v1.0: disc-extraction-complete, scan-session-complete. v1.1 adds the archive-* event types, plus disc-detected/disc-ejected (bead archiver-9xw): optical-ripper lifecycle events fired by the tender loop when a disc is inserted/becomes readable and when it is ejected, respectively -- both fire before/without a rip output existing, so output_path/media_type are not required for them (see the schema's top-level `allOf` conditional)."
     },
     "event_id": {
       "type": "string",
@@ -54,10 +54,10 @@
     },
     "output_path": {
       "type": "string",
-      "description": "Absolute path on the cluster's data volume where the captured/extracted output was written."
+      "description": "Absolute path on the cluster's data volume where the captured/extracted output was written. Required for every event_type except disc-detected/disc-ejected (archiver-9xw), which fire before a rip has produced any output -- see the top-level `allOf` conditional."
     },
     "media_type": {
-      "description": "The type of media/content captured. v1.0 listed a closed enum of capture media types; v1.1 loosens this with an additional pattern branch so archive workloads can emit hierarchical archive/* media types without a schema bump per new provider.",
+      "description": "The type of media/content captured. v1.0 listed a closed enum of capture media types; v1.1 loosens this with an additional pattern branch so archive workloads can emit hierarchical archive/* media types without a schema bump per new provider. Required for every event_type except disc-detected/disc-ejected (archiver-9xw), which have no known media_type yet -- see the top-level `allOf` conditional.",
       "oneOf": [
         {
           "type": "string",
@@ -137,5 +137,37 @@
       "type": "string",
       "description": "Kubernetes node name where the workload ran. Useful for debugging and auditing."
     }
-  }
+  },
+  "allOf": [
+    {
+      "description": "Every event_type except disc-detected/disc-ejected (archiver-9xw) keeps the original v1.0/v1.1 requirement that output_path and media_type be present -- additive-in-place, no loosening for existing event types.",
+      "if": {
+        "properties": {
+          "event_type": {
+            "not": { "enum": ["disc-detected", "disc-ejected"] }
+          }
+        },
+        "required": ["event_type"]
+      },
+      "then": {
+        "required": ["output_path", "media_type"]
+      }
+    },
+    {
+      "description": "disc-detected/disc-ejected are optical-ripper-only lifecycle events (archiver-9xw); constrain source accordingly for these two event types only.",
+      "if": {
+        "properties": {
+          "event_type": {
+            "enum": ["disc-detected", "disc-ejected"]
+          }
+        },
+        "required": ["event_type"]
+      },
+      "then": {
+        "properties": {
+          "source": { "const": "optical-ripper" }
+        }
+      }
+    }
+  ]
 }

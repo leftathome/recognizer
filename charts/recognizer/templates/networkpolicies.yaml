@@ -18,8 +18,12 @@ spec:
             - port: "2049"
               protocol: TCP
     - toEndpoints:
+        # Relay pods carry only app.kubernetes.io/* labels; a bare
+        # `app: notification-relay` selector never matched anything.
         - matchLabels:
-            app: notification-relay
+            app.kubernetes.io/name: {{ include "recognizer.name" . }}
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            app.kubernetes.io/component: notification-relay
       toPorts:
         - ports:
             - port: "8080"
@@ -39,4 +43,24 @@ spec:
         - ports:
             - port: "53"
               protocol: UDP
+{{- if or .Values.archiveImporter.gloveboxIngest.enabled .Values.walhelmSource.enabled }}
+{{- /*
+Glovebox archive-delivery (spec 13 / tus.io), consumed by both the
+archive-importer and walhelm-fetch CronJobs. The two gloveboxIngest blocks
+carry parallel egress.namespace/egress.port values (see values.yaml comments
+tying this to the bearerPort migration); archive-importer's take precedence
+when both are enabled, since its `enabled` flag is the more common path.
+*/}}
+{{- $glovebox := .Values.archiveImporter.gloveboxIngest.egress }}
+{{- if not .Values.archiveImporter.gloveboxIngest.enabled }}
+{{- $glovebox = .Values.walhelmSource.gloveboxIngest.egress }}
+{{- end }}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ $glovebox.namespace }}
+      toPorts:
+        - ports:
+            - port: {{ $glovebox.port | quote }}
+              protocol: TCP
+{{- end }}
 {{- end }}

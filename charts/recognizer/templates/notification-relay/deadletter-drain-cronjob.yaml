@@ -1,0 +1,85 @@
+{{- if and .Values.notificationRelay.enabled .Values.notificationRelay.deadLetter.drain.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "recognizer.fullname" . }}-notification-relay-drain
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recognizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notification-relay-drain
+spec:
+  schedule: {{ .Values.notificationRelay.deadLetter.drain.schedule | quote }}
+  suspend: {{ .Values.notificationRelay.deadLetter.drain.suspend }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "recognizer.labels" . | nindent 12 }}
+            app.kubernetes.io/component: notification-relay-drain
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/arch: amd64
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            fsGroup: 1000
+            fsGroupChangePolicy: OnRootMismatch
+            seccompProfile:
+              type: RuntimeDefault
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: notification-relay-drain
+              image: {{ include "recognizer.image" (dict "root" $ "name" .Values.notificationRelay.image.name "tag" .Values.notificationRelay.image.tag) }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              # No ENTRYPOINT is baked into the relay image (Dockerfile CMD
+              # is exec-form `python -m relay.main`) -- override the full
+              # command rather than relying on `args` alone.
+              command: ["python", "-m", "relay.drain"]
+              env:
+                - name: DEAD_LETTER_DIR
+                  value: /out/notifications/dead-letter
+                - name: RELAY_CONFIG_PATH
+                  value: /etc/relay/config.yaml
+                - name: RELAY_DEADLETTER_MAX_AGE_DAYS
+                  value: {{ .Values.notificationRelay.deadLetter.drain.maxAgeDays | quote }}
+                - name: RELAY_DRAIN_BATCH
+                  value: {{ .Values.notificationRelay.deadLetter.drain.batchSize | quote }}
+                - name: DISCORD_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: notification-relay-tokens
+                      key: discord-webhook-url
+                      optional: true
+                - name: PUSHOVER_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: notification-relay-tokens
+                      key: pushover-token
+                      optional: true
+              volumeMounts:
+                - name: incoming
+                  mountPath: /out
+                - name: relay-config
+                  mountPath: /etc/relay
+              resources:
+                {{- toYaml .Values.notificationRelay.deadLetter.drain.resources | nindent 16 }}
+          volumes:
+            - name: incoming
+              persistentVolumeClaim:
+                claimName: {{ include "recognizer.dataClaimName" . }}
+            - name: relay-config
+              configMap:
+                name: {{ include "recognizer.fullname" . }}-relay-config
+{{- end }}

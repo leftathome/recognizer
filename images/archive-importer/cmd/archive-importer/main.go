@@ -210,7 +210,11 @@ func runZipImport(cfg *Config) error {
 
 	var deliveries []manifest.Delivery
 	if !cfg.DryRun {
-		if orch := gloveboxOrchestrator(cfg, unpackedDir); orch != nil {
+		orch, err := gloveboxOrchestrator(cfg, unpackedDir)
+		if err != nil {
+			return err
+		}
+		if orch != nil {
 			var prior []manifest.Delivery
 			if priorManifest != nil {
 				prior = priorManifest.Deliveries
@@ -306,7 +310,11 @@ func runMboxImport(cfg *Config) error {
 
 	var deliveries []manifest.Delivery
 	if !cfg.DryRun {
-		if orch := gloveboxOrchestrator(cfg, unpackedDir); orch != nil {
+		orch, err := gloveboxOrchestrator(cfg, unpackedDir)
+		if err != nil {
+			return err
+		}
+		if orch != nil {
 			var prior []manifest.Delivery
 			if priorManifest != nil {
 				prior = priorManifest.Deliveries
@@ -335,16 +343,31 @@ func runMboxImport(cfg *Config) error {
 // --- shared helpers ---
 
 // gloveboxOrchestrator returns a configured delivery.Orchestrator, or
-// nil if any of the URL / Token / SourceID config triplet is missing.
-// nil means "skip the delivery step" -- old single-PVC operation mode.
-func gloveboxOrchestrator(cfg *Config, unpackedDir string) *delivery.Orchestrator {
-	if cfg.GloveboxIngestURL == "" || cfg.GloveboxIngestToken == "" || cfg.GloveboxIngestSourceID == "" {
-		return nil
+// nil if the URL/SourceID (and a token, static or file) aren't all
+// present. nil means "skip the delivery step" -- old single-PVC
+// operation mode. A non-nil error means the config was present but
+// invalid (bad CA file, require-tls vs. an http:// URL, etc.) and
+// should abort the run rather than silently disabling delivery.
+func gloveboxOrchestrator(cfg *Config, unpackedDir string) (*delivery.Orchestrator, error) {
+	haveToken := cfg.GloveboxIngestToken != "" || cfg.GloveboxIngestTokenFile != ""
+	if cfg.GloveboxIngestURL == "" || !haveToken || cfg.GloveboxIngestSourceID == "" {
+		return nil, nil
+	}
+	client, err := delivery.NewClientFromConfig(delivery.ClientConfig{
+		BaseURL:    cfg.GloveboxIngestURL,
+		SourceID:   cfg.GloveboxIngestSourceID,
+		Token:      cfg.GloveboxIngestToken,
+		TokenFile:  cfg.GloveboxIngestTokenFile,
+		CAFile:     cfg.GloveboxIngestCAFile,
+		RequireTLS: cfg.GloveboxIngestRequireTLS,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("glovebox client: %w", err)
 	}
 	return &delivery.Orchestrator{
-		Client:  delivery.NewClient(cfg.GloveboxIngestURL, cfg.GloveboxIngestToken, cfg.GloveboxIngestSourceID, nil),
+		Client:  client,
 		TempDir: unpackedDir,
-	}
+	}, nil
 }
 
 func ensureStateAndManifest(cfg *Config, unpackedDir string) (*manifest.Manifest, error) {

@@ -1,0 +1,58 @@
+name: Release
+
+# Tag-driven GitHub Release, mirroring glovebox's release.yml shape.
+# Recognizer ships no end-user binaries -- the deliverables are the
+# container images and the Helm chart, both published to GHCR by ci.yml on
+# the same tag push -- so the release carries the changelog excerpt plus
+# the packaged chart and its checksum for humans who want a file.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG.md section found for ${VERSION}" > release-notes.md
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Package chart for the release assets
+        run: |
+          V="${{ steps.changelog.outputs.version }}"
+          helm package charts/recognizer --version "${V}" --app-version "${V}" --destination release
+          (cd release && sha256sum * > checksums-sha256.txt)
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.changelog.outputs.tag }}
+          name: ${{ steps.changelog.outputs.tag }}
+          body_path: release-notes.md
+          files: |
+            release/*
+          draft: false
+          prerelease: ${{ contains(steps.changelog.outputs.version, '-') }}

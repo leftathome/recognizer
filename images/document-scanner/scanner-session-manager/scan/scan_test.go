@@ -182,6 +182,133 @@ func TestScanPage_ScanError(t *testing.T) {
 	}
 }
 
+func TestFirstDevice_ReturnsFirstLine(t *testing.T) {
+	mock := &mockCommander{
+		results: []mockResult{{
+			Stdout: []byte("epsonscan2:DS-1630:usb:04b8:0154\nother:device:name\n"),
+		}},
+	}
+	s := New(mock)
+	dev, err := s.FirstDevice(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dev != "epsonscan2:DS-1630:usb:04b8:0154" {
+		t.Errorf("got %q, want epsonscan2:DS-1630:usb:04b8:0154", dev)
+	}
+	if len(mock.calls) != 1 || mock.calls[0].Name != "scanimage" {
+		t.Fatalf("expected 1 scanimage call, got %+v", mock.calls)
+	}
+	args := strings.Join(mock.calls[0].Args, " ")
+	if !strings.Contains(args, "-f") || !strings.Contains(args, "%d%n") {
+		t.Errorf("expected -f '%%d%%n' args, got %q", args)
+	}
+}
+
+func TestFirstDevice_NoneFound(t *testing.T) {
+	mock := &mockCommander{results: []mockResult{{Stdout: []byte("")}}}
+	s := New(mock)
+	_, err := s.FirstDevice(context.Background())
+	if err == nil {
+		t.Fatal("expected error when no devices found")
+	}
+	if !strings.Contains(err.Error(), "no scanner devices found") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestFirstDevice_CommandError(t *testing.T) {
+	mock := &mockCommander{
+		results: []mockResult{{
+			Stderr: []byte("scanimage: sane_get_devices() failed\n"),
+			Err:    fmt.Errorf("exit status 1"),
+		}},
+	}
+	s := New(mock)
+	_, err := s.FirstDevice(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "scanimage -f failed") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveDevice_OverrideWins(t *testing.T) {
+	mock := &mockCommander{}
+	s := New(mock)
+	dev, err := s.ResolveDevice(context.Background(), "epsonscan2:DS-1630:usb:04b8:0154")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dev != "epsonscan2:DS-1630:usb:04b8:0154" {
+		t.Errorf("got %q", dev)
+	}
+	if len(mock.calls) != 0 {
+		t.Errorf("expected no commander calls when override is set, got %d", len(mock.calls))
+	}
+}
+
+func TestResolveDevice_AutoDetectsWhenNoOverride(t *testing.T) {
+	mock := &mockCommander{
+		results: []mockResult{{Stdout: []byte("epsonscan2:DS-1630:usb:04b8:0154\n")}},
+	}
+	s := New(mock)
+	dev, err := s.ResolveDevice(context.Background(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dev != "epsonscan2:DS-1630:usb:04b8:0154" {
+		t.Errorf("got %q", dev)
+	}
+	if len(mock.calls) != 1 {
+		t.Errorf("expected 1 auto-detect call, got %d", len(mock.calls))
+	}
+}
+
+func TestResolveDevice_AutoDetectError(t *testing.T) {
+	mock := &mockCommander{results: []mockResult{{Stdout: []byte("")}}}
+	s := New(mock)
+	_, err := s.ResolveDevice(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected error when auto-detect finds nothing")
+	}
+}
+
+func TestStandardPageDimensions_600DPI(t *testing.T) {
+	w, h := StandardPageDimensions(600)
+	if w != 5100 {
+		t.Errorf("width: got %d, want 5100", w)
+	}
+	if h != 6600 {
+		t.Errorf("height: got %d, want 6600", h)
+	}
+}
+
+func TestStandardPageDimensions_300DPI(t *testing.T) {
+	w, h := StandardPageDimensions(300)
+	if w != 2550 {
+		t.Errorf("width: got %d, want 2550", w)
+	}
+	if h != 3300 {
+		t.Errorf("height: got %d, want 3300", h)
+	}
+}
+
+func TestSchemaColorMode(t *testing.T) {
+	cases := map[ScanMode]string{
+		ModeColor:   "color",
+		ModeGray:    "grayscale",
+		ModeLineart: "lineart",
+		ScanMode("Weird"): "weird",
+	}
+	for in, want := range cases {
+		if got := SchemaColorMode(in); got != want {
+			t.Errorf("SchemaColorMode(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestBuildArgs_DefaultParams(t *testing.T) {
 	p := DefaultParams()
 	p.Device = "testdev"

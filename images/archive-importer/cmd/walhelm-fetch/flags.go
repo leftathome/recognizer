@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/leftathome/recognizer/images/archive-importer/internal/delivery"
 )
 
 // Config holds the resolved flags/env for one walhelm-fetch invocation.
@@ -13,8 +15,18 @@ type Config struct {
 	SubjectPrincipal string
 	StateDir         string
 	IngestURL        string
-	IngestToken      string
-	IngestSourceID   string
+	// IngestToken is the static bearer token fallback, used only when
+	// IngestTokenFile is unset.
+	IngestToken string
+	// IngestTokenFile, when set, is re-read per request so Vault token
+	// rotation propagates without a pod restart.
+	IngestTokenFile string
+	IngestSourceID  string
+	// IngestCAFile optionally pins an additional trusted CA for the
+	// glovebox TLS connection.
+	IngestCAFile string
+	// IngestRequireTLS refuses to run against an http:// IngestURL.
+	IngestRequireTLS bool
 	LogLevel         string
 }
 
@@ -40,8 +52,11 @@ func parseFlags(args []string) (*Config, error) {
 	fs.StringVar(&c.SubjectPrincipal, "subject-principal", os.Getenv("WALHELM_SUBJECT_PRINCIPAL"), "data_subject principal, e.g. walhelm:9f2a (env WALHELM_SUBJECT_PRINCIPAL)")
 	fs.StringVar(&c.StateDir, "state-dir", envOr("WALHELM_STATE_DIR", "/data/walhelm"), "Directory holding per-subject cursor state (env WALHELM_STATE_DIR)")
 	fs.StringVar(&c.IngestURL, "glovebox-url", os.Getenv("GLOVEBOX_INGEST_URL"), "Glovebox archive-delivery base URL (env GLOVEBOX_INGEST_URL)")
-	fs.StringVar(&c.IngestToken, "glovebox-token", os.Getenv("GLOVEBOX_INGEST_TOKEN"), "Glovebox bearer token (env GLOVEBOX_INGEST_TOKEN)")
+	fs.StringVar(&c.IngestToken, "glovebox-token", os.Getenv(delivery.EnvToken), "Glovebox bearer token, fallback (env GLOVEBOX_INGEST_TOKEN)")
+	fs.StringVar(&c.IngestTokenFile, "glovebox-token-file", os.Getenv(delivery.EnvTokenFile), "Path to a file holding the glovebox bearer token, re-read per request (env GLOVEBOX_INGEST_TOKEN_FILE)")
 	fs.StringVar(&c.IngestSourceID, "glovebox-source-id", os.Getenv("GLOVEBOX_INGEST_SOURCE_ID"), "Glovebox-side source_id (env GLOVEBOX_INGEST_SOURCE_ID)")
+	fs.StringVar(&c.IngestCAFile, "glovebox-ca-file", os.Getenv(delivery.EnvCAFile), "PEM bundle of additional trusted CAs for the glovebox TLS connection (env GLOVEBOX_INGEST_CA_FILE)")
+	fs.BoolVar(&c.IngestRequireTLS, "glovebox-require-tls", envBool(delivery.EnvRequireTLS), "Refuse to run against an http:// glovebox URL (env GLOVEBOX_INGEST_REQUIRE_TLS)")
 	fs.StringVar(&c.LogLevel, "log-level", envOr("LOG_LEVEL", "info"), "debug / info / warn")
 	if err := fs.Parse(args); err != nil {
 		// flag parse errors are configuration errors (exit 2).
@@ -58,8 +73,8 @@ func parseFlags(args []string) (*Config, error) {
 	if c.IngestURL == "" {
 		missing = append(missing, "GLOVEBOX_INGEST_URL/-glovebox-url")
 	}
-	if c.IngestToken == "" {
-		missing = append(missing, "GLOVEBOX_INGEST_TOKEN/-glovebox-token")
+	if c.IngestToken == "" && c.IngestTokenFile == "" {
+		missing = append(missing, "GLOVEBOX_INGEST_TOKEN_FILE/-glovebox-token-file (or GLOVEBOX_INGEST_TOKEN/-glovebox-token)")
 	}
 	if c.IngestSourceID == "" {
 		missing = append(missing, "GLOVEBOX_INGEST_SOURCE_ID/-glovebox-source-id")
@@ -75,4 +90,9 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envBool(key string) bool {
+	v := os.Getenv(key)
+	return v == "1" || v == "true" || v == "yes"
 }

@@ -19,16 +19,29 @@ spec:
         {{- include "recognizer.labels" . | nindent 8 }}
         app.kubernetes.io/component: document-scanner
     spec:
+      automountServiceAccountToken: false
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       nodeSelector:
         {{- toYaml .Values.documentScanner.nodeSelector | nindent 8 }}
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: scanner
           image: {{ include "recognizer.image" (dict "root" $ "name" .Values.documentScanner.image.name "tag" .Values.documentScanner.image.tag) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             {{- toYaml .Values.documentScanner.resources | nindent 12 }}
           volumeMounts:

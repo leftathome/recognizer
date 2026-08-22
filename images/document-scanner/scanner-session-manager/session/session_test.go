@@ -268,6 +268,43 @@ func TestIdleTimer_ResetOnNewPage(t *testing.T) {
 	}
 }
 
+func TestRemoveLastPage_DropsMostRecent(t *testing.T) {
+	clk := newMockClock(baseTime())
+	m := NewManager(Config{BaseDir: t.TempDir(), Clock: clk})
+
+	m.AddPage(InputADF, true, "front")
+	m.AddPage(InputADF, true, "back")
+	m.RemoveLastPage()
+
+	sess := m.Current()
+	if len(sess.Pages) != 1 {
+		t.Fatalf("expected 1 page after removal, got %d", len(sess.Pages))
+	}
+	if sess.Pages[0].Side != "front" {
+		t.Errorf("expected remaining page to be 'front', got %q", sess.Pages[0].Side)
+	}
+}
+
+func TestRemoveLastPage_NoopWhenIdle(t *testing.T) {
+	m := NewManager(Config{BaseDir: t.TempDir(), Clock: newMockClock(baseTime())})
+	m.RemoveLastPage() // must not panic
+	if m.State() != StateIdle {
+		t.Errorf("expected idle, got %v", m.State())
+	}
+}
+
+func TestRemoveLastPage_NoopWhenNoPages(t *testing.T) {
+	// A session can't currently exist with zero pages (ensureSession is
+	// only reached via AddPage), but guard the empty-slice case anyway.
+	m := NewManager(Config{BaseDir: t.TempDir(), Clock: newMockClock(baseTime())})
+	m.AddPage(InputFlatbed, false, "single")
+	m.RemoveLastPage()
+	m.RemoveLastPage() // second call on now-empty Pages must not panic
+	if len(m.Current().Pages) != 0 {
+		t.Errorf("expected 0 pages, got %d", len(m.Current().Pages))
+	}
+}
+
 func TestOutputDir_Created(t *testing.T) {
 	dir := t.TempDir()
 	clk := newMockClock(baseTime())

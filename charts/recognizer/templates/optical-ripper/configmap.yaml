@@ -49,5 +49,20 @@ data:
     COMPLETED_PATH: "/out/video"
     AUDIO_COMPLETED_PATH: "/out/audio"
     DATA_COMPLETED_PATH: "/out/data"
-    NOTIFY_WEBHOOK: "{{ include "recognizer.relayUrl" . }}"
+    {{- if .Values.hardware.enabled }}
+    # archiver-9xw follow-up: post-rip notification. There is no
+    # "NOTIFY_WEBHOOK" (or any other dedicated post-rip) key in ARM 2.23 --
+    # that was an earlier, incorrect assumption on this line and has been
+    # removed. The real, verified mechanism is the generic BASH_SCRIPT
+    # notification hook (arm/ripper/utils.py:88-91 in the upstream
+    # automatic-ripping-machine/automatic-ripping-machine tree, tag 2.23.2):
+    # ARM execs `bash "$BASH_SCRIPT" "$title" "$body"` on every notify() call,
+    # including true job completion (arm/ripper/arm_ripper.py:185,
+    # arm/ripper/main.py:132,146). The hook shim + payload are shipped via
+    # the arm-hook ConfigMap (hook-configmap.yaml) and mounted at
+    # /etc/arm/hooks; it reads NOTIFY_WEBHOOK/NODE_NAME from the container
+    # env below (same relay URL, same env vars the tender's notify_event
+    # already uses), not from an ARM config key.
+    BASH_SCRIPT: "/etc/arm/hooks/hook.sh"
+    {{- end }}
 {{- end }}

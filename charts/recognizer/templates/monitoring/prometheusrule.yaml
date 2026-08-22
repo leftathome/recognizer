@@ -19,7 +19,7 @@ spec:
             summary: "Notification dead-letter count increasing"
             description: "Dead-lettered notifications have been accumulating for 15 minutes. Check relay connectivity."
         - alert: CaptureWorkloadCrashLoop
-          expr: increase(kube_pod_container_status_restarts_total{namespace="capture"}[1h]) > 3
+          expr: increase(kube_pod_container_status_restarts_total{namespace=~"{{ .Release.Namespace }}|{{ include "recognizer.hardwareNamespace" . }}"}[1h]) > 3
           for: 5m
           labels:
             severity: critical
