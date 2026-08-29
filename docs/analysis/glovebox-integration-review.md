@@ -9,6 +9,12 @@ list, and this repo @ `68b6883` (chart 0.6.2).
 - [architecture-implementation-review.md](architecture-implementation-review.md) — designed-vs-built audit of recognizer itself
 - [action-plan.md](action-plan.md) — work packets derived from both reviews
 
+> **Update 2026-08-29 — glovebox v0.8.0 is released.** The three changes this
+> review flagged as UNRELEASED have shipped, one of them BREAKING. See
+> [§8 (v0.8.0 addendum)](#8-v080-addendum--2026-08-29) for what changed, the
+> corrections v0.8.0's docs make to §4/§5 below, and the migration sequence.
+> Sections 1–7 are preserved as the 2026-08-22 record.
+
 ---
 
 ## 1. Version reality — read this before acting on anything else
@@ -164,11 +170,111 @@ discrepancy"):
 
 - [ ] Pin **glovebox app ≥ 0.6.4** as the supported floor in docs and values comments (multi-GB uploads).
 - [ ] Replace the stale "v0.7.0" framing anywhere it appears: mTLS is unreleased; v0.7.0 is a chart tag.
-- [ ] Keep `gloveboxIngest.url` fully operator-configurable (already true); add an explicit values comment about the coming `bearerPort` migration and the `required`-mode precondition.
+- [x] Keep `gloveboxIngest.url` fully operator-configurable (already true); add an explicit values comment about the `bearerPort` migration and the `required`-mode precondition. **Port moved to 9093 for v0.8.0 — see §8.1.**
 - [ ] Move `GLOVEBOX_INGEST_TOKEN` from env injection to a read-only file mount, re-read per delivery (rotation + `/proc/<pid>/environ` exposure).
 - [ ] Add optional TLS support to the delivery client (accept `https://` URLs + optional CA bundle file) so the bearer listener can be encrypted the day glovebox offers it — today the transport is plaintext HTTP carrying PHI and a bearer token.
 - [ ] Fix our own CiliumNetworkPolicy so egress to glovebox:9091 is actually permitted-and-constrained (today the policy selects zero pods — see the architecture review).
 - [ ] Coordinate with the glovebox operator before their Vault `tlsSkipVerify` flip (confirm `caSecret`).
 - [ ] Register walhelm subject principals glovebox-side before `subjects.json` enforcement turns on (`archiver-vry`).
-- [ ] Design the `archive/recognizer-scan` producer (source-id `recognizer-scanner`, `ocr.txt` at tar root) with fail-closed finalize in mind — blocked on the scanner actually working (see architecture review §3).
+- [ ] Design the `archive/recognizer-scan` producer (source-id `recognizer-scanner`, `ocr.txt` at tar root) with fail-closed finalize in mind — blocked on the scanner actually working (see architecture review §3). Client-side groundwork done: the media type is on our allow-list and finalize content failures are non-retryable (§8.3).
 - [x] File the three upstream issues in §6 — filed 2026-08-22 with sign-off: **glovebox#65** (handoff-doc drift), **glovebox#69** (no `producer` cert template), **glovebox#70** (mTLS client mount-path doc/chart mismatch).
+
+---
+
+## 8. v0.8.0 addendum — 2026-08-29
+
+glovebox **v0.8.0** shipped 2026-08-29. Everything §1 listed as UNRELEASED is
+now released. Two upstream documents are authoritative and supersede the
+auto-generated release notes (which do not call out the breaking change):
+[`docs/upgrading.md`](https://github.com/leftathome/glovebox/blob/v0.8.0/docs/upgrading.md)
+and `CHANGELOG.md` `[0.8.0]`. Raised for us in recognizer#5.
+
+### 8.1 BREAKING — bearer endpoints moved to port 9093
+
+`config.ingest.bearerPort` now defaults to **9093**: `/v1/archives*` and
+`/v1/sanitize` have their own listener, 9091 serves only `/v1/ingest`.
+
+**Done in this repo:** both producers' `gloveboxIngest.url` and
+`gloveboxIngest.egress.port` are 9093.
+
+**There is no overlap window.** Glovebox's archive NetworkPolicy grants exactly
+one port, aimed at whichever listener the bearer endpoints are on, so 9091 and
+9093 are never simultaneously reachable from our namespace; the old port times
+out rather than redirecting. Sequence: agree window → operator upgrades
+(archives unreachable from here) → we roll out the new URL → verify.
+
+In-flight uploads do not survive the operator's restart; partial upload state
+does (RWO PVC), so recovery is the ordinary resume — HEAD the upload-id
+**against the new port** and continue from `Upload-Offset`.
+
+Which layout a cluster is on, without asking:
+
+```bash
+kubectl get svc -n glovebox glovebox-glovebox-ingest -o jsonpath='{.spec.ports[*].name}{"\n"}'
+# "ingest ingest-bearer" -> split, use 9093 | "ingest" -> shared, use 9091
+```
+
+`bearerPort: 0` restores the shared layout but re-opens the P0-7 exposure — a
+migration aid, not a supported configuration.
+
+### 8.2 Vault TLS verification on by default — correction to §5
+
+§5 predicted this "401s/503s every upload". Impact right, details wrong:
+**the symptom is 503, not 401, and it is not silent.** Token fetch fails at
+boot, the archive listener mounts a deliberate 503 fallback, and the cause is
+logged:
+
+```
+glovebox vault k8s login failed: <err> (archive listener will mount 503 fallback)
+```
+
+It does not retry into a good state — the operator sets
+`ingest.auth.vault.caSecret` (a Secret holding the CA bundle under `ca.crt`)
+and restarts the pod. Operator-side, but confirm it before their upgrade.
+
+### 8.3 `archive/recognizer-scan` finalize — correction to §5
+
+We recorded the fail-closed error as `ErrExtractUnscanned` ("no scanner
+configured"). That exists in glovebox's code but is **unreachable in the
+shipped binary** — glovebox refuses to start without a scanner. The failure we
+will actually hit is **`ErrScanMissingOCR`**: a missing or whitespace-only
+`ocr.txt` at the tar root. Both surface as an opaque `500 internal_finalize`,
+so the response body cannot distinguish them (upstream ergonomics:
+glovebox#71, open by design).
+
+**Done in this repo** (`internal/delivery`):
+
+- `archive/recognizer-scan` added to `AllowedMediaTypes` — it was missing, so
+  the scanner lane would have failed our own client-side validation before a
+  request was ever sent.
+- `ErrFinalizeContent`: a 5xx carrying `internal_finalize` is **not retried**.
+  Previously the generic 5xx path burned `MaxRetries` re-sending the final
+  chunk, re-running a full server-side untar and scan of a multi-GB tarball
+  into a verdict that can never change. A 5xx whose body is not glovebox's
+  error envelope stays retryable (a truncated or proxy-generated 5xx really is
+  transient); both behaviors are regression-tested.
+
+Two consequences to carry into the scanner producer when it exists:
+
+- **Retrying the same `archive_id` after a fix is safe** — a failed finalize
+  publishes nothing and cleans up, so a corrected re-POST returns 201, not 409.
+- **A 2xx does not mean the text was published.** If the scanner quarantines
+  the extracted text, finalize still succeeds but `content.extracted.md` holds
+  a stub naming the score and firing signals; the raw text stays at
+  `tree/ocr.txt`. Read `content.extracted.md` to know which happened.
+
+### 8.4 Our upstream issues are resolved
+
+All three landed in v0.8.0 and are closed. The chart now exposes
+`ingest.tls.producers`, so `spiffe://glovebox/producer/recognizer` can be
+minted by the chart if archives ever move to mTLS — closing the §4.3 gap.
+
+Also fixed upstream: the handoff doc previously documented two error codes that
+**do not exist in glovebox's source** — `tar_unsupported_entry` and
+`quota_exhausted`. Checked: no recognizer code was written against either
+(we reference only the real `tar_unsafe_entry`), so we had no dead code. The
+real codes are `tar_unsafe_entry` (400) and `storage_hard_cap` (503).
+
+Still open upstream, neither a regression: glovebox#68 (latent cert
+Secret-name collision) and glovebox#71 (client-caused finalize failures return
+500). App floor is unchanged at **0.6.4**; v0.8.0 is well past it.

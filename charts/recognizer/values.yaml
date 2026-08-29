@@ -283,24 +283,40 @@ archiveImporter:
   # deployed glovebox contains the bearer-listener fix (planPlaintextListeners).
   # Without it, /v1/archives goes offline and our uploads get connection-refused.
   #
-  # Coming change: config.ingest.bearerPort will split /v1/archives onto
-  # its own listener (default 0 = shared 9091). When the operator sets it,
-  # update this url's port in the same maintenance window. Full URL is
-  # operator-configurable; no code change needed.
+  # BREAKING, landed in glovebox v0.8.0 (2026-08-29): config.ingest.bearerPort
+  # now defaults to 9093, so /v1/archives* and /v1/sanitize live on their own
+  # listener and 9091 serves only /v1/ingest. The port below tracks v0.8.0.
+  #
+  # There is NO overlap window. Glovebox's archive NetworkPolicy grants exactly
+  # one port, pointed at whichever listener the bearer endpoints are on, so
+  # 9091 and 9093 are never both reachable from our namespace; the old port
+  # times out rather than redirecting. Roll this out in the SAME maintenance
+  # window as the operator's glovebox upgrade, after it: agree window ->
+  # operator upgrades (archives unreachable from here) -> we roll out -> verify.
+  #
+  # Against a pre-0.8.0 glovebox, set this back to 9091 (and egress.port too).
+  # To check which layout a cluster is on:
+  #   kubectl get svc -n glovebox glovebox-glovebox-ingest \
+  #     -o jsonpath='{.spec.ports[*].name}{"\n"}'
+  #   "ingest ingest-bearer" -> split, use 9093 | "ingest" -> shared, use 9091
+  #
+  # In-flight uploads do not survive the operator's restart, but the partial
+  # upload state does (RWO PVC): HEAD the upload-id against the NEW port and
+  # resume from Upload-Offset.
   gloveboxIngest:
     enabled: false
-    url: "http://glovebox.glovebox.svc.cluster.local:9091"
+    url: "http://glovebox.glovebox.svc.cluster.local:9093"
     # source_id under ^[a-z][a-z0-9]*(-[a-z0-9]+)*$, <=64 chars. Smoke-
     # test uses "recognizer-smoke-test"; production uses whatever you
     # negotiated with the glovebox operator.
     sourceID: "recognizer-smoke-test"
     # Egress target for the CiliumNetworkPolicy (networkpolicies.yaml). Must
-    # track the host:port in `url` above -- when the operator lands the
-    # bearerPort migration noted above and moves /v1/archives off the shared
-    # 9091 listener, update `port` here in the same maintenance window.
+    # track the host:port in `url` above -- if you pin `url` back to 9091 for a
+    # pre-0.8.0 glovebox, change this to 9091 in the same edit or the policy
+    # drops every packet at L4 (TCP timeouts, not HTTP errors).
     egress:
       namespace: glovebox
-      port: 9091
+      port: 9093
     vault:
       refreshInterval: "1m"
       secretStoreRef:
@@ -388,20 +404,36 @@ walhelmSource:
   # deployed glovebox contains the bearer-listener fix (planPlaintextListeners).
   # Without it, /v1/archives goes offline and our uploads get connection-refused.
   #
-  # Coming change: config.ingest.bearerPort will split /v1/archives onto
-  # its own listener (default 0 = shared 9091). When the operator sets it,
-  # update this url's port in the same maintenance window. Full URL is
-  # operator-configurable; no code change needed.
+  # BREAKING, landed in glovebox v0.8.0 (2026-08-29): config.ingest.bearerPort
+  # now defaults to 9093, so /v1/archives* and /v1/sanitize live on their own
+  # listener and 9091 serves only /v1/ingest. The port below tracks v0.8.0.
+  #
+  # There is NO overlap window. Glovebox's archive NetworkPolicy grants exactly
+  # one port, pointed at whichever listener the bearer endpoints are on, so
+  # 9091 and 9093 are never both reachable from our namespace; the old port
+  # times out rather than redirecting. Roll this out in the SAME maintenance
+  # window as the operator's glovebox upgrade, after it: agree window ->
+  # operator upgrades (archives unreachable from here) -> we roll out -> verify.
+  #
+  # Against a pre-0.8.0 glovebox, set this back to 9091 (and egress.port too).
+  # To check which layout a cluster is on:
+  #   kubectl get svc -n glovebox glovebox-glovebox-ingest \
+  #     -o jsonpath='{.spec.ports[*].name}{"\n"}'
+  #   "ingest ingest-bearer" -> split, use 9093 | "ingest" -> shared, use 9091
+  #
+  # In-flight uploads do not survive the operator's restart, but the partial
+  # upload state does (RWO PVC): HEAD the upload-id against the NEW port and
+  # resume from Upload-Offset.
   gloveboxIngest:
-    url: "http://glovebox.glovebox.svc.cluster.local:9091"
+    url: "http://glovebox.glovebox.svc.cluster.local:9093"
     sourceID: "recognizer-walhelm"
     # Egress target for the CiliumNetworkPolicy (networkpolicies.yaml). Must
-    # track the host:port in `url` above -- when the operator lands the
-    # bearerPort migration noted above and moves /v1/archives off the shared
-    # 9091 listener, update `port` here in the same maintenance window.
+    # track the host:port in `url` above -- if you pin `url` back to 9091 for a
+    # pre-0.8.0 glovebox, change this to 9091 in the same edit or the policy
+    # drops every packet at L4 (TCP timeouts, not HTTP errors).
     egress:
       namespace: glovebox
-      port: 9091
+      port: 9093
     vault:
       refreshInterval: "1m"
       secretStoreRef:

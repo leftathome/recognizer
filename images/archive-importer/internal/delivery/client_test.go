@@ -20,11 +20,11 @@ import (
 // fakeGlovebox is a stand-in for the real /v1/archives endpoint that
 // covers the subset of tus.io behavior our client exercises.
 type fakeGlovebox struct {
-	t             *testing.T
-	requireToken  string
-	createCalls   atomic.Int32
-	patchCalls    atomic.Int32
-	storedAtomic  atomic.Pointer[storedUpload]
+	t            *testing.T
+	requireToken string
+	createCalls  atomic.Int32
+	patchCalls   atomic.Int32
+	storedAtomic atomic.Pointer[storedUpload]
 	// Trigger one PATCH 503 then succeed; used to exercise retry.
 	flapOnce atomic.Bool
 }
@@ -389,6 +389,93 @@ func TestUpload_4xxNonRetryable(t *testing.T) {
 	var he *HTTPError
 	if !errors.As(err, &he) || he.Status != 401 {
 		t.Errorf("expected HTTPError 401, got %T %v", err, err)
+	}
+}
+
+// glovebox v0.8.0 returns an opaque `500 internal_finalize` when finalize
+// fails for content reasons (in practice a missing/whitespace-only ocr.txt in
+// an archive/recognizer-scan tarball). That is a content bug, not
+// backpressure, so it must fail on the FIRST response rather than re-uploading
+// the final chunk MaxRetries times into the same verdict.
+func TestUpload_FinalizeContentErrorIsNotRetried(t *testing.T) {
+	var patches int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/archives", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/v1/archives/up-1")
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/v1/archives/up-1", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PATCH" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		patches++
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"error":"internal_finalize","message":"finalize failed"}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body := []byte("payload")
+	tmp := t.TempDir()
+	bodyPath := filepath.Join(tmp, "body.bin")
+	must(t, os.WriteFile(bodyPath, body, 0644))
+	sum := sha256.Sum256(body)
+
+	c := NewClient(srv.URL, "tok", "recognizer-scanner", nil)
+	_, err := c.Upload(context.Background(), Item{
+		ArchiveID: "x", ArchiveFilename: "f", MediaType: "archive/recognizer-scan",
+		MatcherID: "m", SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(body)),
+	}, bodyPath)
+	if !errors.Is(err, ErrFinalizeContent) {
+		t.Fatalf("expected ErrFinalizeContent, got %T %v", err, err)
+	}
+	if patches != 1 {
+		t.Errorf("expected exactly 1 PATCH (no retries), got %d", patches)
+	}
+}
+
+// A 5xx whose body is not glovebox's error envelope stays retryable -- a
+// truncated or proxy-generated 5xx really is transient.
+func TestUpload_Opaque5xxStillRetries(t *testing.T) {
+	var patches int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/archives", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/v1/archives/up-2")
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/v1/archives/up-2", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PATCH" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		patches++
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, "<html>gateway blew up</html>")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body := []byte("payload")
+	tmp := t.TempDir()
+	bodyPath := filepath.Join(tmp, "body.bin")
+	must(t, os.WriteFile(bodyPath, body, 0644))
+	sum := sha256.Sum256(body)
+
+	c := NewClient(srv.URL, "tok", "recognizer-smoke-test", nil)
+	c.MaxRetries = 1 // keep the test's backoff short
+	_, err := c.Upload(context.Background(), Item{
+		ArchiveID: "x", ArchiveFilename: "f", MediaType: "archive/mbox",
+		MatcherID: "m", SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(body)),
+	}, bodyPath)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if errors.Is(err, ErrFinalizeContent) {
+		t.Error("opaque 5xx must not be classified as a finalize content error")
+	}
+	if patches != 2 {
+		t.Errorf("expected 2 PATCH attempts (initial + 1 retry), got %d", patches)
 	}
 }
 
