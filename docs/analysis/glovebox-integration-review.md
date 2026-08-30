@@ -27,6 +27,19 @@ chart* version (`charts/glovebox/Chart.yaml: version: 0.7.0`,
 `appVersion: "0.6.1"`); the newest app changelog section is **0.6.4
 (2026-06-26)**.
 
+**There is no `v0.6.0` on GitHub — neither a release nor a tag.** GitHub's tags
+jump `v0.5.0` → `v0.6.1`. Glovebox withdrew it: its published artifacts carried
+household `entity_id` defaults and de-pseudonymizing name comments baked into
+the public Helm chart, connector/importer configs, tests and docs. v0.6.1 is
+the scrubbed supersession, with *no functional or source change* beyond the
+scrub (glovebox `CHANGELOG.md` `[0.6.1]` "Note"; the PII scrub is
+`glovebox-0nzk`). The clean v0.6.0 remains on their primary GitLab remote.
+
+So where this document cites **"0.6.0"** it means the changelog *section* — that
+work is on GitHub from **v0.6.1 onward**. Also absent as GitHub *releases*
+(though the tags exist): `v0.4.0`–`v0.4.3` and `v0.5.0`. Verified against the
+GitHub release and tag lists on 2026-08-30.
+
 Everything below marked **UNRELEASED** is on glovebox `main` but in no tagged
 release as of 2026-08-22:
 
@@ -149,6 +162,9 @@ for us into three concrete, indirect obligations:
 | spec-15 provenance keys required for `archive/walhelm-export`: `acq_provider`, `acq_account_id`, `acq_auth_method` (enum: exactly `browser_session`), `data_subject` (`walhelm:<id>`, never a name), optional `audience` | 0.6.0 | walhelm-fetch already sends these (covered by `run_e2e_test.go`) | No change; keep the e2e test asserting the headers |
 | Known-subjects registry, fail-closed `subject_unresolved` quarantine when `enforce: true` | 0.6.0 | Our walhelm `data_subject` principals must be registered glovebox-side before enforcement turns on | Coordinate principal registration (our bead `archiver-vry` is exactly this; still open) |
 | Tarballs must be **uncompressed** in v1 | 0.6.0 | `.tar.gz` fails at finalize (`invalid tar header`) | Already compliant; assert in tests |
+
+("0.6.0" rows above: that tag was withdrawn from GitHub — the work is
+available there from **v0.6.1** onward. See §1.)
 | Token rotation semantics: ESO refresh (1m) + glovebox in-process reload (300s) ≈ up to ~6 min propagation; handoff says "re-read the token on every send" | n/a | We inject the token as an **env var**, cached for the pod's life. Fine for short-lived CronJob pods; wrong if any producer becomes long-running | Move token to a mounted file, re-read per delivery (also fixes the env-var exposure finding) |
 | Resource sizing: 12 GiB upload peaked ~3.0 GiB server-side; glovebox values say "raise it for the recognizer's expected concurrent set" | n/a | Our concurrency (per-source cap 4) shapes their memory | Tell the operator our expected concurrent upload profile |
 
