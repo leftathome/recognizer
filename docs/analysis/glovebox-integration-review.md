@@ -27,6 +27,39 @@ chart* version (`charts/glovebox/Chart.yaml: version: 0.7.0`,
 `appVersion: "0.6.1"`); the newest app changelog section is **0.6.4
 (2026-06-26)**.
 
+**There is no `v0.6.0` on GitHub — neither a release nor a tag.** Verified with
+`git ls-remote --tags` against the GitHub remote: tags jump `v0.5.0` →
+`v0.6.1`. But the v0.6.0 *code* did reach GitHub — its release-prep commits are
+ancestors of `origin/main` there (`c845808` "prep v0.6.0", `b8dc556` "CHANGELOG
+v0.6.0", `6f7400b` "bump chart to 0.6.0"). Only the tag and release are absent.
+
+Glovebox's account: the `[0.6.1]` "Note" says v0.6.0 was "withdrawn from GitHub"
+because its published artifacts carried household `entity_id` defaults and
+de-pseudonymizing name comments baked into the public Helm chart,
+connector/importer configs, tests and docs; the commit is titled "clean re-cut
+superseding withdrawn v0.6.0" (`6c92d91`, PII scrub `glovebox-0nzk`). v0.6.1
+carries *no functional or source change* beyond the scrub, and the clean v0.6.0
+lives on their GitLab remote.
+
+**Undetermined: whether that tag was ever pushed to GitHub and deleted, or only
+ever cut on GitLab.** Both fit the evidence, and "withdrawn" does not settle it.
+Two things point at GitLab-only: v0.6.1 was merged with a *GitLab*-style merge
+commit (`e85d9a3` "Merge branch … into 'main'", not GitHub's "Merge pull request
+#N"), so that release was cut on GitLab and mirrored over; and the gitlab-first
+release pipeline (`glovebox-npsj`, "gitlab.orac.local established as the primary
+build/release target ahead of GitHub") landed in this very release. The check
+that would settle it is a GitHub Actions *Release* run for tag `v0.6.0` —
+Actions runs survive tag deletion — but the Actions listing available here
+ignores workflow/branch filters, so it was not enumerated. It does not matter
+operationally; recorded so nobody re-derives it.
+
+So where this document cites **"0.6.0"** it means the changelog *section* — that
+work is on GitHub from **v0.6.1 onward**.
+
+Also absent as GitHub *releases* (though the tags exist): `v0.4.0`–`v0.4.3` and
+`v0.5.0`. Verified against the GitHub release and tag lists, and the remote's
+tag refs, on 2026-08-30.
+
 Everything below marked **UNRELEASED** is on glovebox `main` but in no tagged
 release as of 2026-08-22:
 
@@ -149,6 +182,9 @@ for us into three concrete, indirect obligations:
 | spec-15 provenance keys required for `archive/walhelm-export`: `acq_provider`, `acq_account_id`, `acq_auth_method` (enum: exactly `browser_session`), `data_subject` (`walhelm:<id>`, never a name), optional `audience` | 0.6.0 | walhelm-fetch already sends these (covered by `run_e2e_test.go`) | No change; keep the e2e test asserting the headers |
 | Known-subjects registry, fail-closed `subject_unresolved` quarantine when `enforce: true` | 0.6.0 | Our walhelm `data_subject` principals must be registered glovebox-side before enforcement turns on | Coordinate principal registration (our bead `archiver-vry` is exactly this; still open) |
 | Tarballs must be **uncompressed** in v1 | 0.6.0 | `.tar.gz` fails at finalize (`invalid tar header`) | Already compliant; assert in tests |
+
+("0.6.0" rows above: that tag was withdrawn from GitHub — the work is
+available there from **v0.6.1** onward. See §1.)
 | Token rotation semantics: ESO refresh (1m) + glovebox in-process reload (300s) ≈ up to ~6 min propagation; handoff says "re-read the token on every send" | n/a | We inject the token as an **env var**, cached for the pod's life. Fine for short-lived CronJob pods; wrong if any producer becomes long-running | Move token to a mounted file, re-read per delivery (also fixes the env-var exposure finding) |
 | Resource sizing: 12 GiB upload peaked ~3.0 GiB server-side; glovebox values say "raise it for the recognizer's expected concurrent set" | n/a | Our concurrency (per-source cap 4) shapes their memory | Tell the operator our expected concurrent upload profile |
 
