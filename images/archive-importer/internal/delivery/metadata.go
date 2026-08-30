@@ -75,6 +75,13 @@ var AllowedMediaTypes = map[string]struct{}{
 	"archive/imap-export":            {},
 	"archive/generic-tarball":        {},
 	"archive/walhelm-export":         {},
+	// The document scanner's lane. Glovebox gates this media type
+	// fail-closed to the authenticated source-id "recognizer-scanner"
+	// (403 source_not_authorized from any other source), and its
+	// finalize scans the bundled tree/ocr.txt -- a missing or
+	// whitespace-only ocr.txt fails finalize with an opaque
+	// 500 internal_finalize (see delivery.ErrFinalizeContent).
+	"archive/recognizer-scan": {},
 }
 
 // Validate returns an error if the Item is malformed. We do the cheap

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -400,6 +401,31 @@ func (c *Client) resolve(loc string) (string, bool, error) {
 	return c.BaseURL + loc, false, nil
 }
 
+// ErrFinalizeContent marks a finalize that failed for a reason retrying will
+// never fix -- glovebox v0.8.0 returns an opaque `500 internal_finalize` for
+// client-caused finalize failures, in practice a missing or whitespace-only
+// `ocr.txt` at the tar root of an archive/recognizer-scan tarball
+// (ErrScanMissingOCR server-side). Retrying re-runs a full server-side untar
+// and scan of a multi-GB tarball that will never succeed, so we stop at the
+// first one. Recovery is to fix the tarball and re-POST: a failed finalize
+// publishes nothing and cleans up, so the same archive_id returns 201, not
+// 409. Upstream ergonomics tracked as glovebox#71.
+var ErrFinalizeContent = errors.New("delivery: finalize failed for content reasons (not retryable)")
+
+// isFinalizeContentError reports whether a 5xx body carries glovebox's
+// `internal_finalize` code. The body is the documented {"error":"...",
+// "message":"..."} shape; anything undecodable is treated as retryable,
+// since a truncated or proxy-generated 5xx really is transient.
+func isFinalizeContentError(body []byte) bool {
+	var e struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &e); err != nil {
+		return false
+	}
+	return e.Error == "internal_finalize"
+}
+
 // patchChunk sends one PATCH and returns the new server offset.
 func (c *Client) patchChunk(ctx context.Context, uploadURL string, f *os.File, offset, length int64) (int64, error) {
 	var lastErr error
@@ -439,6 +465,11 @@ func (c *Client) patchChunk(ctx context.Context, uploadURL string, f *os.File, o
 				return 0, fmt.Errorf("parse Upload-Offset %q: %w", off, perr)
 			}
 			return n, nil
+		case resp.StatusCode >= 500 && isFinalizeContentError(body):
+			// Content bug, not backpressure: fail now rather than burning
+			// MaxRetries re-uploading the final chunk into the same verdict.
+			return 0, fmt.Errorf("%w: %s", ErrFinalizeContent,
+				(&HTTPError{Op: "PATCH " + uploadURL, Status: resp.StatusCode, Body: string(body)}).Error())
 		case resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests:
 			lastErr = &HTTPError{
 				Op: "PATCH " + uploadURL, Status: resp.StatusCode, Body: string(body),
