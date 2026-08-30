@@ -27,18 +27,38 @@ chart* version (`charts/glovebox/Chart.yaml: version: 0.7.0`,
 `appVersion: "0.6.1"`); the newest app changelog section is **0.6.4
 (2026-06-26)**.
 
-**There is no `v0.6.0` on GitHub — neither a release nor a tag.** GitHub's tags
-jump `v0.5.0` → `v0.6.1`. Glovebox withdrew it: its published artifacts carried
-household `entity_id` defaults and de-pseudonymizing name comments baked into
-the public Helm chart, connector/importer configs, tests and docs. v0.6.1 is
-the scrubbed supersession, with *no functional or source change* beyond the
-scrub (glovebox `CHANGELOG.md` `[0.6.1]` "Note"; the PII scrub is
-`glovebox-0nzk`). The clean v0.6.0 remains on their primary GitLab remote.
+**There is no `v0.6.0` on GitHub — neither a release nor a tag.** Verified with
+`git ls-remote --tags` against the GitHub remote: tags jump `v0.5.0` →
+`v0.6.1`. But the v0.6.0 *code* did reach GitHub — its release-prep commits are
+ancestors of `origin/main` there (`c845808` "prep v0.6.0", `b8dc556` "CHANGELOG
+v0.6.0", `6f7400b` "bump chart to 0.6.0"). Only the tag and release are absent.
+
+Glovebox's account: the `[0.6.1]` "Note" says v0.6.0 was "withdrawn from GitHub"
+because its published artifacts carried household `entity_id` defaults and
+de-pseudonymizing name comments baked into the public Helm chart,
+connector/importer configs, tests and docs; the commit is titled "clean re-cut
+superseding withdrawn v0.6.0" (`6c92d91`, PII scrub `glovebox-0nzk`). v0.6.1
+carries *no functional or source change* beyond the scrub, and the clean v0.6.0
+lives on their GitLab remote.
+
+**Undetermined: whether that tag was ever pushed to GitHub and deleted, or only
+ever cut on GitLab.** Both fit the evidence, and "withdrawn" does not settle it.
+Two things point at GitLab-only: v0.6.1 was merged with a *GitLab*-style merge
+commit (`e85d9a3` "Merge branch … into 'main'", not GitHub's "Merge pull request
+#N"), so that release was cut on GitLab and mirrored over; and the gitlab-first
+release pipeline (`glovebox-npsj`, "gitlab.orac.local established as the primary
+build/release target ahead of GitHub") landed in this very release. The check
+that would settle it is a GitHub Actions *Release* run for tag `v0.6.0` —
+Actions runs survive tag deletion — but the Actions listing available here
+ignores workflow/branch filters, so it was not enumerated. It does not matter
+operationally; recorded so nobody re-derives it.
 
 So where this document cites **"0.6.0"** it means the changelog *section* — that
-work is on GitHub from **v0.6.1 onward**. Also absent as GitHub *releases*
-(though the tags exist): `v0.4.0`–`v0.4.3` and `v0.5.0`. Verified against the
-GitHub release and tag lists on 2026-08-30.
+work is on GitHub from **v0.6.1 onward**.
+
+Also absent as GitHub *releases* (though the tags exist): `v0.4.0`–`v0.4.3` and
+`v0.5.0`. Verified against the GitHub release and tag lists, and the remote's
+tag refs, on 2026-08-30.
 
 Everything below marked **UNRELEASED** is on glovebox `main` but in no tagged
 release as of 2026-08-22:
